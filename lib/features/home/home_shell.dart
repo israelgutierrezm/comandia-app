@@ -3,12 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth.dart';
 import '../pos/accounts_tab.dart';
+import '../printing/printing_screen.dart';
 import '../reports/reports_tab.dart';
 import '../sessions/sessions_tab.dart';
 import '../supervision/supervision_screen.dart';
 
-/// El hogar de la app: supervisión por pestañas. La sesión (cerrar) vive en la
-/// barra superior, común a las tres.
+/// El hogar de la app: las funciones por pestañas. La sesión (cerrar) vive en la
+/// barra superior, común a todas.
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -19,8 +20,8 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
-  static const _titles = ['Resumen', 'Cuentas', 'Turnos', 'Reportes'];
-  static const _tabs = [ResumenTab(), AccountsTab(), SessionsTab(), ReportsTab()];
+  static const _titles = ['Resumen', 'Cuentas', 'Turnos', 'Reportes', 'Impresión'];
+  static const _tabs = [ResumenTab(), AccountsTab(), SessionsTab(), ReportsTab(), PrintingTab()];
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +60,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             icon: Icon(Icons.bar_chart_outlined),
             selectedIcon: Icon(Icons.bar_chart),
             label: 'Reportes',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.print_outlined),
+            selectedIcon: Icon(Icons.print),
+            label: 'Impresión',
           ),
         ],
       ),

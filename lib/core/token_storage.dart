@@ -24,5 +24,11 @@ class TokenStorage {
   Future<String?> readRole() => _storage.read(key: _kRole);
   Future<String?> readBranch() => _storage.read(key: _kBranch);
 
-  Future<void> clear() => _storage.deleteAll();
+  /// Cierra la sesión del USUARIO. Borra solo sus llaves; deja intacto el token del agente de impresión, que es una
+  /// credencial aparte (ligada al dispositivo, no al usuario) y debe sobrevivir al cierre de sesión.
+  Future<void> clear() async {
+    await _storage.delete(key: _kToken);
+    await _storage.delete(key: _kRole);
+    await _storage.delete(key: _kBranch);
+  }
 }
