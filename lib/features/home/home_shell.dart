@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth.dart';
+import '../pos/accounts_tab.dart';
 import '../reports/reports_tab.dart';
 import '../sessions/sessions_tab.dart';
 import '../supervision/supervision_screen.dart';
@@ -18,8 +19,8 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
-  static const _titles = ['Resumen', 'Turnos', 'Reportes'];
-  static const _tabs = [ResumenTab(), SessionsTab(), ReportsTab()];
+  static const _titles = ['Resumen', 'Cuentas', 'Turnos', 'Reportes'];
+  static const _tabs = [ResumenTab(), AccountsTab(), SessionsTab(), ReportsTab()];
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +44,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard),
             label: 'Resumen',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined),
+            selectedIcon: Icon(Icons.receipt_long),
+            label: 'Cuentas',
           ),
           NavigationDestination(
             icon: Icon(Icons.point_of_sale_outlined),
