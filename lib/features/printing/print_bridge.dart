@@ -16,10 +16,32 @@ class PrintAgentStorage {
 
   final FlutterSecureStorage _storage;
   static const _kToken = 'print_agent_token';
+  static const _kCharset = 'print_charset';
+  static const _kPrinted = 'printed_jobs';
 
   Future<void> saveToken(String token) => _storage.write(key: _kToken, value: token.trim());
   Future<String?> readToken() => _storage.read(key: _kToken);
   Future<void> clear() => _storage.delete(key: _kToken);
+
+  Future<void> saveCharset(String name) => _storage.write(key: _kCharset, value: name);
+  Future<String?> readCharset() => _storage.read(key: _kCharset);
+
+  // Registro de trabajos ya impresos (idempotencia): si un trabajo reaparece porque el aviso `printed` se perdió y su
+  // reclamo expiró, el puente lo reconoce y NO lo reimprime. Ordenado, el más reciente primero, con tope.
+  Future<List<String>> _printedList() async {
+    final raw = await _storage.read(key: _kPrinted);
+    return (raw == null || raw.isEmpty) ? <String>[] : raw.split(',').where((e) => e.isNotEmpty).toList();
+  }
+
+  Future<bool> isPrinted(String ulid) async => (await _printedList()).contains(ulid);
+
+  Future<void> markPrinted(String ulid) async {
+    final list = await _printedList();
+    if (list.contains(ulid)) return;
+    // Se conservan los últimos 300: suficiente para cubrir la ventana de un reclamo, acotado para no crecer sin fin.
+    final next = [ulid, ...list].take(300).toList();
+    await _storage.write(key: _kPrinted, value: next.join(','));
+  }
 }
 
 final printAgentStorageProvider = Provider<PrintAgentStorage>(
@@ -115,6 +137,7 @@ class BridgeState {
     this.active = false,
     this.hasToken = false,
     this.busy = false,
+    this.charset = Charset.cp850,
     this.log = const [],
     this.lastError,
   });
@@ -122,6 +145,7 @@ class BridgeState {
   final bool active;
   final bool hasToken;
   final bool busy;
+  final Charset charset;
   final List<JobLog> log;
   final String? lastError;
 
@@ -129,6 +153,7 @@ class BridgeState {
     bool? active,
     bool? hasToken,
     bool? busy,
+    Charset? charset,
     List<JobLog>? log,
     String? lastError,
     bool clearError = false,
@@ -137,6 +162,7 @@ class BridgeState {
         active: active ?? this.active,
         hasToken: hasToken ?? this.hasToken,
         busy: busy ?? this.busy,
+        charset: charset ?? this.charset,
         log: log ?? this.log,
         lastError: clearError ? null : (lastError ?? this.lastError),
       );
@@ -154,13 +180,20 @@ class PrintBridge extends Notifier<BridgeState> {
   @override
   BridgeState build() {
     ref.onDispose(() => _timer?.cancel());
-    _loadToken();
+    _loadSettings();
     return const BridgeState();
   }
 
-  Future<void> _loadToken() async {
-    final token = await ref.read(printAgentStorageProvider).readToken();
-    state = state.copyWith(hasToken: token != null && token.isNotEmpty);
+  Future<void> _loadSettings() async {
+    final store = ref.read(printAgentStorageProvider);
+    final token = await store.readToken();
+    final charset = Charset.fromName(await store.readCharset());
+    state = state.copyWith(hasToken: token != null && token.isNotEmpty, charset: charset);
+  }
+
+  Future<void> setCharset(Charset charset) async {
+    await ref.read(printAgentStorageProvider).saveCharset(charset.name);
+    state = state.copyWith(charset: charset);
   }
 
   Future<void> saveToken(String token) async {
@@ -223,15 +256,25 @@ class PrintBridge extends Notifier<BridgeState> {
 
   Future<void> _handle(PrintJob job) async {
     final title = job.printerName == null ? job.kindLabel : '${job.kindLabel} · ${job.printerName}';
+    final store = ref.read(printAgentStorageProvider);
     try {
+      // Idempotencia: si ya se imprimió (el aviso se perdió y el trabajo reapareció al expirar su reclamo), NO se
+      // reimprime; solo se reintenta el aviso para que el servidor lo cierre.
+      if (await store.isPrinted(job.ulid)) {
+        await _report(job, ok: true);
+        _push(title, true, 'Ya impreso; se reintentó el aviso');
+        return;
+      }
       if (job.connection != 'network') {
         const msg = 'Esta app solo imprime por red (LAN).';
         await _report(job, ok: false, error: 'Conexión no soportada por la app: ${job.connection}. $msg');
         _push(title, false, '$msg (${job.connection})');
         return;
       }
-      final bytes = renderTicket(job.payload, paperWidth: job.paperWidth);
+      final bytes = renderTicket(job.payload, paperWidth: job.paperWidth, charset: state.charset);
       await _sendTcp(job.target, bytes);
+      // Se marca ANTES de avisar: si el aviso falla, la marca ya evita la reimpresión.
+      await store.markPrinted(job.ulid);
       await _report(job, ok: true);
       _push(title, true, 'Impreso');
     } on _BridgeError catch (e) {

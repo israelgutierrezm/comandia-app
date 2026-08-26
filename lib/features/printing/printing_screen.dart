@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'escpos.dart';
 import 'print_bridge.dart';
 
 /// Pestaña «Impresión»: convierte este dispositivo en un agente de impresión.
@@ -136,6 +137,22 @@ class _PrintingTabState extends ConsumerState<PrintingTab> {
               ),
               value: state.active,
               onChanged: (on) => on ? bridge.start() : bridge.stop(),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              contentPadding: const EdgeInsets.only(right: 8),
+              title: const Text('Página de códigos'),
+              subtitle: Text('Cámbiala si los acentos salen raros en el ticket.', style: TextStyle(color: theme.colorScheme.outline)),
+              trailing: DropdownButton<Charset>(
+                value: state.charset,
+                underline: const SizedBox.shrink(),
+                onChanged: (c) {
+                  if (c != null) bridge.setCharset(c);
+                },
+                items: [
+                  for (final c in Charset.values) DropdownMenuItem(value: c, child: Text(c.label)),
+                ],
+              ),
             ),
             const Divider(height: 1),
             Row(

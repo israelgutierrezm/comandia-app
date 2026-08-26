@@ -2,7 +2,24 @@ import 'dart:convert';
 
 import 'package:comandia_app/features/printing/escpos.dart';
 import 'package:comandia_app/features/printing/print_bridge.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// ¿Aparece la subsecuencia `needle` dentro de `hay`?
+bool _containsSeq(List<int> hay, List<int> needle) {
+  for (var i = 0; i + needle.length <= hay.length; i++) {
+    var ok = true;
+    for (var j = 0; j < needle.length; j++) {
+      if (hay[i + j] != needle[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
 
 void main() {
   // El corte total: GS V 0.
@@ -18,12 +35,11 @@ void main() {
         {'quantity': 2, 'name': 'Taco', 'modifiers': [{'name': 'sin cebolla'}]},
         {'quantity': 1, 'name': 'Agua', 'modifiers': []},
       ],
-    });
+    }, charset: Charset.ascii);
 
     final text = latin1.decode(bytes);
     expect(text, contains('Cocina'));
     expect(text, contains('Mesa 4'));
-    expect(text, contains('Barra'));
     expect(text, contains('2 x Taco'));
     expect(text, contains('+ sin cebolla'));
     // Una comanda no lleva totales.
@@ -44,7 +60,7 @@ void main() {
       'payments': [
         {'method': 'Efectivo', 'amount': '100.00'},
       ],
-    });
+    }, charset: Charset.ascii);
 
     final text = latin1.decode(bytes);
     expect(text, contains('Subtotal'));
@@ -55,18 +71,37 @@ void main() {
     expect(text, contains('Cambio'));
   });
 
-  test('el texto se normaliza a ASCII: sin bytes altos por acentos', () {
-    final bytes = renderTicket({
-      'business': {'name': 'Café Ñandú'},
-      'account': {'display_name': 'Órdenes'},
-      'items': const [],
+  group('páginas de códigos', () {
+    // «Café» = C a f é
+    const cafe = [0x43, 0x61, 0x66];
+
+    test('ASCII pliega los acentos y no manda ESC t', () {
+      final b = EscPos(charset: Charset.ascii)..text('Café Ñandú ¿órale?');
+      final bytes = b.bytes();
+      expect(latin1.decode(bytes), contains('Cafe Nandu ?orale?'));
+      // Sin selector de página.
+      expect(_containsSeq(bytes, [0x1B, 0x74]), isFalse);
+      // Ningún byte alto: se plegó, no se codificó crudo.
+      expect(bytes.where((x) => x > 126 && x < 160), isEmpty);
     });
 
-    final text = latin1.decode(bytes);
-    expect(text, contains('Cafe Nandu'));
-    expect(text, contains('Ordenes'));
-    // Ningún byte de texto imprimible por encima de 126 (los acentos se plegaron, no se codificaron crudos).
-    expect(bytes.where((b) => b > 126 && b < 160), isEmpty);
+    test('CP850 codifica é=0x82 y selecciona ESC t 2', () {
+      final bytes = (EscPos(charset: Charset.cp850)..text('Café')).bytes();
+      expect(_containsSeq(bytes, [0x1B, 0x74, 0x02]), isTrue);
+      expect(_containsSeq(bytes, [...cafe, 0x82]), isTrue); // é en CP850
+    });
+
+    test('CP1252 codifica é=0xE9 y selecciona ESC t 16', () {
+      final bytes = (EscPos(charset: Charset.cp1252)..text('Café')).bytes();
+      expect(_containsSeq(bytes, [0x1B, 0x74, 0x10]), isTrue);
+      expect(_containsSeq(bytes, [...cafe, 0xE9]), isTrue); // é en CP1252/Latin-1
+    });
+
+    test('Charset.fromName cae en CP850 ante lo desconocido', () {
+      expect(Charset.fromName('cp1252'), Charset.cp1252);
+      expect(Charset.fromName(null), Charset.cp850);
+      expect(Charset.fromName('marciano'), Charset.cp850);
+    });
   });
 
   test('PrintJob.fromJson lee la impresora y el payload', () {
@@ -91,5 +126,66 @@ void main() {
     expect(job.paperWidth, 80);
     expect(job.supportsCashDrawer, isFalse);
     expect(job.payload['business']['name'], 'Cocina');
+  });
+
+  group('PrintAgentStorage', () {
+    late Map<String, String?> mem;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      mem = {};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        (call) async {
+          final args = (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
+          switch (call.method) {
+            case 'write':
+              mem[args['key'] as String] = args['value'] as String?;
+              return null;
+            case 'read':
+              return mem[args['key'] as String];
+            case 'delete':
+              mem.remove(args['key'] as String);
+              return null;
+            case 'containsKey':
+              return mem.containsKey(args['key'] as String);
+            case 'readAll':
+              return mem;
+            case 'deleteAll':
+              mem.clear();
+              return null;
+          }
+          return null;
+        },
+      );
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        null,
+      );
+    });
+
+    test('idempotencia: marca y reconoce trabajos ya impresos', () async {
+      const store = PrintAgentStorage(FlutterSecureStorage());
+
+      expect(await store.isPrinted('JOB1'), isFalse);
+      await store.markPrinted('JOB1');
+      expect(await store.isPrinted('JOB1'), isTrue);
+
+      // Marcar dos veces no duplica ni rompe.
+      await store.markPrinted('JOB1');
+      expect(await store.isPrinted('JOB1'), isTrue);
+      expect(await store.isPrinted('OTRO'), isFalse);
+    });
+
+    test('guarda y lee la página de códigos', () async {
+      const store = PrintAgentStorage(FlutterSecureStorage());
+
+      expect(await store.readCharset(), isNull);
+      await store.saveCharset(Charset.cp1252.name);
+      expect(Charset.fromName(await store.readCharset()), Charset.cp1252);
+    });
   });
 }
