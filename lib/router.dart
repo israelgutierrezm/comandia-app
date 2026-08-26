@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'features/auth/auth.dart';
 import 'features/auth/login_screen.dart';
-import 'features/supervision/supervision_screen.dart';
+import 'features/home/home_shell.dart';
 
 /// Puente Riverpod → Listenable para que go_router reevalúe la redirección
 /// cuando cambia el estado de sesión.
@@ -38,7 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: '/', builder: (_, _) => const _Splash()),
       GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
-      GoRoute(path: '/home', builder: (_, _) => const SupervisionScreen()),
+      GoRoute(path: '/home', builder: (_, _) => const HomeShell()),
     ],
   );
 });

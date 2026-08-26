@@ -1,43 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../auth/auth.dart';
 import 'supervision.dart';
 
-class SupervisionScreen extends ConsumerWidget {
-  const SupervisionScreen({super.key});
+/// Pestaña «Resumen»: contexto de la sesión (rol y sucursal activos) y la caja
+/// abierta del turno con su corte. Vive dentro del shell con pestañas, así que
+/// no trae Scaffold ni barra propia.
+class ResumenTab extends ConsumerWidget {
+  const ResumenTab({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(supervisionControllerProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(async.valueOrNull?.context.tenantName ?? 'Comandia'),
-        actions: [
-          IconButton(
-            tooltip: 'Salir',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(authControllerProvider.notifier).logout(),
-          ),
-        ],
+    return async.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => _ErrorState(
+        message: '$e',
+        onRetry: () => ref.read(supervisionControllerProvider.notifier).refresh(),
       ),
-      body: async.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _ErrorState(
-          message: '$e',
-          onRetry: () => ref.read(supervisionControllerProvider.notifier).refresh(),
-        ),
-        data: (data) => RefreshIndicator(
-          onRefresh: () => ref.read(supervisionControllerProvider.notifier).refresh(),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _ContextCard(context: data.context),
-              const SizedBox(height: 16),
-              _SessionCard(data: data),
-            ],
-          ),
+      data: (data) => RefreshIndicator(
+        onRefresh: () => ref.read(supervisionControllerProvider.notifier).refresh(),
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _ContextCard(context: data.context),
+            const SizedBox(height: 16),
+            _SessionCard(data: data),
+          ],
         ),
       ),
     );
@@ -56,7 +46,7 @@ class _ContextCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Sesión', style: Theme.of(ctx).textTheme.titleMedium),
+            Text(context.tenantName, style: Theme.of(ctx).textTheme.titleLarge),
             const SizedBox(height: 10),
             _row(ctx, 'Persona', context.membershipName ?? '—'),
             _row(ctx, 'Rol activo', context.roleName ?? '—'),
@@ -131,44 +121,37 @@ class _CutTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    String money(String? v) => v == null ? '—' : '\$$v';
     return Column(
       children: [
-        Row(
-          children: const [
-            Expanded(flex: 2, child: Text('Método', style: TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Esperado', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Declarado', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Dif.', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
-          ],
-        ),
+        const Row(children: [
+          Expanded(flex: 2, child: Text('Método', style: TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text('Esperado', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text('Declarado', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text('Dif.', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600))),
+        ]),
         const SizedBox(height: 6),
         for (final r in rows)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                Expanded(flex: 2, child: Text(r.method)),
-                Expanded(child: Text(_money(r.expected), textAlign: TextAlign.end)),
-                Expanded(child: Text(_money(r.declared), textAlign: TextAlign.end)),
-                Expanded(
-                  child: Text(
-                    _money(r.difference),
-                    textAlign: TextAlign.end,
-                    style: TextStyle(
-                      color: (r.difference != null && r.difference!.startsWith('-'))
-                          ? Theme.of(context).colorScheme.error
-                          : null,
-                    ),
+            child: Row(children: [
+              Expanded(flex: 2, child: Text(r.method)),
+              Expanded(child: Text(money(r.expected), textAlign: TextAlign.end)),
+              Expanded(child: Text(money(r.declared), textAlign: TextAlign.end)),
+              Expanded(
+                child: Text(
+                  money(r.difference),
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    color: (r.difference != null && r.difference!.startsWith('-')) ? Theme.of(context).colorScheme.error : null,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ]),
           ),
       ],
     );
   }
-
-  String _money(String? v) => v == null ? '—' : '\$$v';
 }
 
 class _ErrorState extends StatelessWidget {
