@@ -121,7 +121,8 @@ class Account {
       version: d['version'],
       acceptsItems: (d['accepts_items'] ?? false) as bool,
       totals: {
-        for (final k in ['subtotal', 'discount_total', 'vat_total', 'total', 'paid_total', 'due']) k: t[k] as String?,
+        for (final k in ['subtotal', 'discount_total', 'vat_total', 'total', 'paid_total', 'due', 'change_total', 'tip_total'])
+          k: t[k] as String?,
       },
       items: ((d['items'] as List?) ?? const [])
           .map((e) => AccountItem.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -144,6 +145,60 @@ class CaptureLine {
 
   CaptureLine copyWith({int? quantity}) =>
       CaptureLine(articleUlid: articleUlid, name: name, price: price, quantity: quantity ?? this.quantity);
+}
+
+/// Un método de pago del catálogo. Las tres banderas las resuelve el servidor y dicen a la caja cómo comportarse: si
+/// calcular cambio, si exigir referencia y si el método toca el cajón de efectivo.
+class PaymentMethod {
+  PaymentMethod({
+    required this.ulid,
+    required this.name,
+    required this.allowsChange,
+    required this.requiresReference,
+    required this.affectsCashDrawer,
+  });
+
+  final String ulid;
+  final String name;
+  final bool allowsChange;
+  final bool requiresReference;
+  final bool affectsCashDrawer;
+
+  factory PaymentMethod.fromJson(Map<String, dynamic> d) => PaymentMethod(
+        ulid: d['ulid'] as String,
+        name: (d['name'] ?? '—') as String,
+        allowsChange: (d['allows_change'] ?? false) as bool,
+        requiresReference: (d['requires_reference'] ?? false) as bool,
+        affectsCashDrawer: (d['affects_cash_drawer'] ?? false) as bool,
+      );
+}
+
+/// Una línea de pago que se está armando en la caja. Los montos viajan como texto decimal (2 posiciones), como el resto
+/// del dinero. `tendered` (recibido) solo tiene sentido en efectivo; el servidor calcula el cambio.
+class PaymentLine {
+  PaymentLine({required this.method, required this.amount, this.tendered, this.tip, this.reference});
+
+  final PaymentMethod method;
+  final String amount;
+  final String? tendered;
+  final String? tip;
+  final String? reference;
+
+  Map<String, dynamic> toJson() => {
+        'payment_method_ulid': method.ulid,
+        'amount': amount,
+        if (tendered != null && tendered!.isNotEmpty) 'tendered_amount': tendered,
+        if (tip != null && tip!.isNotEmpty) 'tip_amount': tip,
+        if (reference != null && reference!.isNotEmpty) 'reference': reference,
+      };
+}
+
+/// El servidor rechazó el cobro (422): monto inválido, referencia faltante, etc. Lleva su mensaje para mostrarlo tal cual.
+class ChargeError implements Exception {
+  const ChargeError(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +261,28 @@ class PosRepository {
     _created(res.statusCode, 'comandar');
   }
 
+  Future<List<PaymentMethod>> paymentMethods() async {
+    final res = await _api.dio.get<dynamic>('/payment-methods', queryParameters: {'status': 'active', 'per_page': 100});
+    _ok(res.statusCode, 'los métodos de pago');
+    return _list(res.data).map((e) => PaymentMethod.fromJson(e)).toList();
+  }
+
+  /// Cobra la cuenta con uno o varios pagos. Cuando lo pagado cubre el total, el servidor la pasa a `paid` y emite el
+  /// ticket final (que imprime por el puente). Devuelve la cuenta actualizada (con `change_total` si hubo cambio).
+  Future<Account> charge(String ulid, dynamic version, List<PaymentLine> payments) async {
+    final res = await _api.dio.post<dynamic>('/pos-accounts/$ulid/payments', data: {
+      'version': version,
+      'payments': [for (final p in payments) p.toJson()],
+    });
+    if (res.statusCode == 409) throw const StaleAccount();
+    if (res.statusCode == 422) {
+      final msg = (res.data is Map ? res.data['message'] : null) as String?;
+      throw ChargeError(msg ?? 'No se pudo cobrar: revisa los montos.');
+    }
+    _created(res.statusCode, 'cobrar');
+    return Account.fromJson(_map(res.data));
+  }
+
   List<Map<String, dynamic>> _list(dynamic body) {
     final raw = (body is Map ? body['data'] : body) as List? ?? const [];
     return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -243,6 +320,18 @@ final catalogProvider = FutureProvider.autoDispose<List<CatalogArticle>>(
 final accountProvider = FutureProvider.autoDispose.family<Account, String>(
   (ref, ulid) => ref.watch(posRepositoryProvider).account(ulid),
 );
+
+final paymentMethodsProvider = FutureProvider.autoDispose<List<PaymentMethod>>(
+  (ref) => ref.watch(posRepositoryProvider).paymentMethods(),
+);
+
+/// Los permisos del rol activo, leídos del contexto. Sirven para ocultar acciones que el servidor rechazaría de todos
+/// modos (p. ej. «Cobrar» a un mesero sin `pos.accounts.charge`). El servidor sigue siendo la autoridad.
+final permissionsProvider = FutureProvider<Set<String>>((ref) async {
+  final res = await ref.watch(apiClientProvider).dio.get<dynamic>('/context');
+  final data = (res.data is Map && res.data['data'] is Map) ? res.data['data'] as Map : (res.data as Map);
+  return ((data['permissions'] as List?) ?? const []).map((e) => '$e').toSet();
+});
 
 // ---------------------------------------------------------------------------
 // Carrito de captura (local, por cuenta)

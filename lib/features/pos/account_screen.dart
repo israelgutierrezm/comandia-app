@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'cobro_screen.dart';
 import 'pos.dart';
 
 String _money(String? v) => v == null ? '—' : '\$$v';
@@ -315,6 +316,18 @@ class _CuentaTab extends ConsumerWidget {
             ),
           ),
         ),
+        // «Cobrar» solo si el rol activo puede (pos.accounts.charge) y queda saldo. El servidor sigue decidiendo.
+        if ((ref.watch(permissionsProvider).valueOrNull?.contains('pos.accounts.charge') ?? false) &&
+            (double.tryParse(account.totals['due'] ?? '0') ?? 0) > 0) ...[
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => CobroScreen(account: account)),
+            ),
+            icon: const Icon(Icons.payments),
+            label: Text('Cobrar ${_money(account.totals['due'])}'),
+          ),
+        ],
         if (pending.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text('Comandar', style: Theme.of(context).textTheme.titleMedium),

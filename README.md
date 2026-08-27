@@ -10,6 +10,7 @@ Los tres roles de la Iteración 9 están completos:
 
 - **Supervisión** — contexto de sesión, caja abierta del turno y su corte, turnos y reportes.
 - **Captura** — cuentas abiertas, marcado de 1 toque, comandar y para llevar.
+- **Cobro** — pagar una cuenta (uno o varios métodos, recibido/cambio, referencia, propina); al saldar, Comandia emite el ticket final que imprime por el puente.
 - **Puente de impresión** — la app como agente ESC/POS: sondea trabajos y los manda por TCP a las impresoras de red. Con **páginas de códigos** (CP850/CP1252/ASCII), **idempotencia** (no reimprime un trabajo ya impreso) y **estación desatendida** (servicio en primer plano: sigue imprimiendo con la pantalla apagada o la app en segundo plano).
 
 ## Arquitectura
