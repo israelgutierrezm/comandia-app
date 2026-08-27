@@ -132,7 +132,7 @@ class _PrintingTabState extends ConsumerState<PrintingTab> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Puente activo', style: TextStyle(fontWeight: FontWeight.w600)),
               subtitle: Text(
-                state.active ? 'Escuchando trabajos de impresión.' : 'Detenido.',
+                state.active ? 'Imprime aunque apagues la pantalla o cambies de app.' : 'Detenido.',
                 style: TextStyle(color: theme.colorScheme.outline),
               ),
               value: state.active,

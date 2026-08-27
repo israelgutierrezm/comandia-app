@@ -38,6 +38,9 @@ dependencies:
   flutter_riverpod: ^2.6.1
   go_router: ^18.0.0
   flutter_secure_storage: ^11.0.0
+  # Servicio en primer plano para la estación de impresión desatendida (Android): mantiene el sondeo vivo con la
+  # pantalla apagada o la app en segundo plano, con notificación persistente.
+  flutter_foreground_task: ^9.1.0
 
 dev_dependencies:
   flutter_test:

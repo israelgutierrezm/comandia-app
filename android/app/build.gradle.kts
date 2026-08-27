@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "mx.comandia.comandia_app"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_secure_storage 11 exige compileSdk 37; el valor por omisión de Flutter aún es 36. Se fija explícito para
+    // satisfacer esa metadata (AAR) y desbloquear el build de Android.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

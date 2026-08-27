@@ -2,6 +2,14 @@
     <!-- La app consume la API por red. En DESARROLLO el servidor local es HTTP (no HTTPS), por eso se permite tráfico
          en claro; en producción la API va por HTTPS y esto deja de aplicar. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Estación de impresión desatendida: servicio en primer plano que mantiene el sondeo vivo con la pantalla apagada
+         o la app en segundo plano. `dataSync` es el tipo declarado (Android 14+ lo exige). La notificación requiere
+         POST_NOTIFICATIONS (Android 13+, se pide en tiempo de ejecución). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <application
         android:label="Comandia"
         android:name="${applicationName}"
@@ -34,6 +42,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- El servicio en primer plano del puente de impresión. No cambiar el nombre: es la clase del plugin
+             flutter_foreground_task. El tipo `dataSync` debe coincidir con el que se pasa en startService. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

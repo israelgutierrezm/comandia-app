@@ -6,7 +6,11 @@ Consume la misma **API v1** del monolito (`/api/v1`) y se autentica por **token*
 
 ## Estado
 
-**Esqueleto que camina** (primer entregable): acceso por token → guardado seguro del token → una pantalla de **supervisión** real (contexto de sesión + caja abierta del turno y su corte). Valida toda la pila de punta a punta. Lo que sigue crece encima: supervisión completa → captura de pedidos → puente de impresión.
+Los tres roles de la Iteración 9 están completos:
+
+- **Supervisión** — contexto de sesión, caja abierta del turno y su corte, turnos y reportes.
+- **Captura** — cuentas abiertas, marcado de 1 toque, comandar y para llevar.
+- **Puente de impresión** — la app como agente ESC/POS: sondea trabajos y los manda por TCP a las impresoras de red. Con **páginas de códigos** (CP850/CP1252/ASCII), **idempotencia** (no reimprime un trabajo ya impreso) y **estación desatendida** (servicio en primer plano: sigue imprimiendo con la pantalla apagada o la app en segundo plano).
 
 ## Arquitectura
 
@@ -14,7 +18,20 @@ Consume la misma **API v1** del monolito (`/api/v1`) y se autentica por **token*
 - **HTTP:** `dio`, con un interceptor que añade `Authorization: Bearer` y `X-Role`/`X-Branch`.
 - **Token:** `flutter_secure_storage` (Keychain / Keystore).
 - **Navegación:** `go_router`, con redirección según haya sesión.
-- **Por feature:** `lib/features/{auth,supervision}`; infraestructura en `lib/core`.
+- **Por feature:** `lib/features/{auth,supervision,sessions,reports,pos,printing}`; infraestructura en `lib/core`.
+
+## Puente de impresión (estación)
+
+Convierte un dispositivo Android en un **agente de impresión** para una sucursal:
+
+1. En el administrador de Comandia: **Impresoras → Agentes de impresión → Nuevo agente**. Copia el **token** (se ve una sola vez).
+2. En la app: pestaña **Impresión → Guardar token**, elige la **página de códigos** y activa el **Puente**.
+
+Con el puente activo corre un **servicio en primer plano** (`flutter_foreground_task`) con notificación persistente: el sondeo sigue vivo aunque la pantalla se apague o la app pase a segundo plano. El núcleo del ciclo vive en `PrintPump` (sin Flutter), reutilizado por el servicio y por «Probar ahora».
+
+- **Solo imprime por red** (`network`, TCP a `IP:puerto`). `usb`/`windows_share` se reportan como fallo con mensaje: un móvil no los alcanza.
+- **iOS** no tiene servicio real en segundo plano (el sistema mata los sockets): ahí el puente funciona **solo en primer plano**. El objetivo son estaciones Android.
+- **Pendiente de verificar en dispositivo físico:** el servicio en primer plano no se prueba en `flutter test`. La lógica (`PrintPump`, páginas de códigos, idempotencia) sí está cubierta por pruebas.
 
 ## Correr
 

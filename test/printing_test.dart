@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:comandia_app/features/printing/escpos.dart';
-import 'package:comandia_app/features/printing/print_bridge.dart';
+import 'package:comandia_app/features/printing/print_agent.dart';
+import 'package:comandia_app/features/printing/print_pump.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,6 +21,48 @@ bool _containsSeq(List<int> hay, List<int> needle) {
     if (ok) return true;
   }
   return false;
+}
+
+/// Almacenamiento en memoria para probar el pump sin plataforma.
+class _FakeStore implements PrintStore {
+  final Set<String> printed = {};
+  String? charset;
+
+  @override
+  Future<String?> readToken() async => 'tok';
+  @override
+  Future<String?> readCharset() async => charset;
+  @override
+  Future<bool> isPrinted(String ulid) async => printed.contains(ulid);
+  @override
+  Future<void> markPrinted(String ulid) async => printed.add(ulid);
+}
+
+/// Adaptador HTTP simulado: responde a cada ruta con lo que le diga `handler`.
+class _FakeAdapter implements HttpClientAdapter {
+  _FakeAdapter(this.handler);
+  final ResponseBody Function(RequestOptions options) handler;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async =>
+      handler(options);
+}
+
+ResponseBody _json(Object body, int status) => ResponseBody.fromString(
+      jsonEncode(body),
+      status,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+
+Dio _dioReturning(ResponseBody Function(RequestOptions o) handler) {
+  final dio = Dio(BaseOptions(baseUrl: 'http://host/api/v1', validateStatus: (s) => s != null && s < 500));
+  dio.httpClientAdapter = _FakeAdapter(handler);
+  return dio;
 }
 
 void main() {
@@ -124,7 +168,6 @@ void main() {
     expect(job.connection, 'network');
     expect(job.target, '192.168.1.50:9100');
     expect(job.paperWidth, 80);
-    expect(job.supportsCashDrawer, isFalse);
     expect(job.payload['business']['name'], 'Cocina');
   });
 
@@ -186,6 +229,100 @@ void main() {
       expect(await store.readCharset(), isNull);
       await store.saveCharset(Charset.cp1252.name);
       expect(Charset.fromName(await store.readCharset()), Charset.cp1252);
+    });
+  });
+
+  group('PrintPump.cycle', () {
+    final job = {
+      'ulid': 'J1',
+      'kind_label': 'Comanda',
+      'printer': {'name': 'Cocina', 'connection': 'network', 'target': '10.0.0.9:9100', 'paper_width': 80},
+      'payload': {
+        'business': {'name': 'Cocina'},
+        'account': {'display_name': 'Mesa 2'},
+        'items': [
+          {'quantity': 1, 'name': 'Taco', 'modifiers': []},
+        ],
+      },
+    };
+
+    test('imprime un trabajo de red, avisa y no reimprime al reaparecer', () async {
+      final store = _FakeStore();
+      String? host;
+      int? port;
+      List<int>? bytes;
+      var printedPosts = 0;
+
+      final dio = _dioReturning((o) {
+        if (o.path.endsWith('/jobs/next')) return _json({'data': [job]}, 200);
+        if (o.path.endsWith('/printed')) {
+          printedPosts++;
+          return _json({'ok': true}, 200);
+        }
+        return _json({'ok': true}, 200);
+      });
+
+      final pump = PrintPump(
+        dio: dio,
+        store: store,
+        sender: (h, p, b) async {
+          host = h;
+          port = p;
+          bytes = b;
+        },
+      );
+
+      final events = await pump.cycle();
+      expect(events.single.ok, isTrue);
+      expect(host, '10.0.0.9');
+      expect(port, 9100);
+      expect(latin1.decode(bytes!), contains('Mesa 2'));
+      expect(await store.isPrinted('J1'), isTrue);
+      expect(printedPosts, 1);
+
+      // El mismo trabajo reaparece (aviso perdido): NO se reenvía a la impresora.
+      host = null;
+      final again = await pump.cycle();
+      expect(again.single.ok, isTrue);
+      expect(host, isNull);
+    });
+
+    test('lanza PumpAuthError cuando el token es rechazado (403)', () async {
+      final dio = _dioReturning((o) => _json({'message': 'no'}, 403));
+      final pump = PrintPump(dio: dio, store: _FakeStore(), sender: (_, _, _) async {});
+      await expectLater(pump.cycle(), throwsA(isA<PumpAuthError>()));
+    });
+
+    test('marca fallo y no imprime cuando la impresora no es de red', () async {
+      final usb = {
+        'ulid': 'J2',
+        'kind_label': 'Cuenta',
+        'printer': {'name': 'Caja', 'connection': 'usb', 'target': 'POS-80'},
+        'payload': {
+          'business': {'name': 'x'},
+          'items': [],
+        },
+      };
+      var failedPosts = 0;
+      final dio = _dioReturning((o) {
+        if (o.path.endsWith('/jobs/next')) return _json({'data': [usb]}, 200);
+        if (o.path.endsWith('/failed')) {
+          failedPosts++;
+          return _json({'ok': true}, 200);
+        }
+        return _json({'ok': true}, 200);
+      });
+      var sent = false;
+      final pump = PrintPump(
+        dio: dio,
+        store: _FakeStore(),
+        sender: (_, _, _) async => sent = true,
+      );
+
+      final events = await pump.cycle();
+      expect(events.single.ok, isFalse);
+      expect(sent, isFalse);
+      expect(failedPosts, 1);
     });
   });
 }

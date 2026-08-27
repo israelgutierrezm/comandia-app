@@ -1,125 +1,20 @@
-import 'dart:async';
-import 'dart:io';
-
 import 'package:dio/dio.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-import '../../core/config.dart';
 import '../../core/providers.dart';
 import 'escpos.dart';
-
-/// Almacenamiento del token del AGENTE de impresión — distinto del token del usuario. El puente autentica con su propia
-/// credencial (la emite el administrador del negocio) y sigue vivo aunque el usuario cierre su sesión.
-class PrintAgentStorage {
-  const PrintAgentStorage(this._storage);
-
-  final FlutterSecureStorage _storage;
-  static const _kToken = 'print_agent_token';
-  static const _kCharset = 'print_charset';
-  static const _kPrinted = 'printed_jobs';
-
-  Future<void> saveToken(String token) => _storage.write(key: _kToken, value: token.trim());
-  Future<String?> readToken() => _storage.read(key: _kToken);
-  Future<void> clear() => _storage.delete(key: _kToken);
-
-  Future<void> saveCharset(String name) => _storage.write(key: _kCharset, value: name);
-  Future<String?> readCharset() => _storage.read(key: _kCharset);
-
-  // Registro de trabajos ya impresos (idempotencia): si un trabajo reaparece porque el aviso `printed` se perdió y su
-  // reclamo expiró, el puente lo reconoce y NO lo reimprime. Ordenado, el más reciente primero, con tope.
-  Future<List<String>> _printedList() async {
-    final raw = await _storage.read(key: _kPrinted);
-    return (raw == null || raw.isEmpty) ? <String>[] : raw.split(',').where((e) => e.isNotEmpty).toList();
-  }
-
-  Future<bool> isPrinted(String ulid) async => (await _printedList()).contains(ulid);
-
-  Future<void> markPrinted(String ulid) async {
-    final list = await _printedList();
-    if (list.contains(ulid)) return;
-    // Se conservan los últimos 300: suficiente para cubrir la ventana de un reclamo, acotado para no crecer sin fin.
-    final next = [ulid, ...list].take(300).toList();
-    await _storage.write(key: _kPrinted, value: next.join(','));
-  }
-}
+import 'print_agent.dart';
+import 'print_pump.dart';
+import 'print_service.dart';
 
 final printAgentStorageProvider = Provider<PrintAgentStorage>(
   (ref) => PrintAgentStorage(ref.watch(secureStorageProvider)),
 );
 
-/// Cliente contra `/api/v1/print-agent/*`. Manda el token del agente en la cabecera `X-Print-Agent-Token`, que lee del
-/// almacenamiento en cada petición (misma disciplina que [ApiClient] con el token del usuario).
-class PrintAgentClient {
-  PrintAgentClient(this._storage)
-      : dio = Dio(
-          BaseOptions(
-            baseUrl: AppConfig.apiV1,
-            headers: {'Accept': 'application/json'},
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 20),
-            validateStatus: (status) => status != null && status < 500,
-          ),
-        ) {
-    dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) async {
-          final token = await _storage.readToken();
-          if (token != null && token.isNotEmpty) {
-            options.headers['X-Print-Agent-Token'] = token;
-          }
-          handler.next(options);
-        },
-      ),
-    );
-  }
-
-  final Dio dio;
-  final PrintAgentStorage _storage;
-}
-
 final printAgentClientProvider = Provider<PrintAgentClient>(
   (ref) => PrintAgentClient(ref.watch(printAgentStorageProvider)),
 );
-
-/// Un trabajo de impresión tal como lo entrega `jobs/next`.
-class PrintJob {
-  PrintJob({
-    required this.ulid,
-    required this.kindLabel,
-    required this.connection,
-    required this.target,
-    required this.paperWidth,
-    required this.supportsCashDrawer,
-    required this.payload,
-    this.printerName,
-  });
-
-  final String ulid;
-  final String kindLabel;
-
-  /// `network` | `usb` | `windows_share`. Esta app solo puede con `network` (TCP a la LAN).
-  final String connection;
-  final String? target;
-  final int? paperWidth;
-  final bool supportsCashDrawer;
-  final Map<String, dynamic> payload;
-  final String? printerName;
-
-  factory PrintJob.fromJson(Map<String, dynamic> j) {
-    final printer = (j['printer'] as Map?)?.cast<String, dynamic>();
-    return PrintJob(
-      ulid: j['ulid'] as String,
-      kindLabel: (j['kind_label'] ?? j['kind'] ?? 'Ticket').toString(),
-      connection: (printer?['connection'] ?? 'network').toString(),
-      target: printer?['target'] as String?,
-      paperWidth: (printer?['paper_width'] as num?)?.toInt(),
-      supportsCashDrawer: printer?['supports_cash_drawer'] == true,
-      payload: (j['payload'] as Map?)?.cast<String, dynamic>() ?? const {},
-      printerName: printer?['name'] as String?,
-    );
-  }
-}
 
 /// Una entrada del registro visible del puente (últimas impresiones y fallos).
 class JobLog {
@@ -168,32 +63,38 @@ class BridgeState {
       );
 }
 
-/// El puente de impresión: mientras está activo, un [Timer] sondea trabajos, los arma en ESC/POS y los manda por TCP a la
-/// impresora de red; luego reporta al servidor `printed`/`failed`. Los efectos cruzados (marcar el trabajo) los decide el
-/// servidor: la app solo imprime y avisa.
+/// El puente de impresión. La estación desatendida corre en un **servicio en primer plano** (isolate aparte que el SO
+/// no congela); este controlador lo arranca/detiene y refleja el registro que el servicio le manda. «Probar ahora»
+/// corre un ciclo en primer plano, sin el servicio, para confirmar la conexión.
 class PrintBridge extends Notifier<BridgeState> {
-  Timer? _timer;
   bool _cycleRunning = false;
-
-  static const _interval = Duration(seconds: 4);
 
   @override
   BridgeState build() {
-    ref.onDispose(() => _timer?.cancel());
+    // El servicio vive en otro isolate; manda sus eventos por aquí.
+    FlutterForegroundTask.addTaskDataCallback(_onServiceData);
+    ref.onDispose(() => FlutterForegroundTask.removeTaskDataCallback(_onServiceData));
     _loadSettings();
     return const BridgeState();
+  }
+
+  void _onServiceData(Object data) {
+    if (data is! Map) return;
+    if (data['error'] != null) {
+      state = state.copyWith(lastError: '${data['error']}', active: false);
+      return;
+    }
+    final e = PumpEvent.fromMap(data);
+    _push(e.title, e.ok, e.detail);
+    state = state.copyWith(clearError: true);
   }
 
   Future<void> _loadSettings() async {
     final store = ref.read(printAgentStorageProvider);
     final token = await store.readToken();
     final charset = Charset.fromName(await store.readCharset());
-    state = state.copyWith(hasToken: token != null && token.isNotEmpty, charset: charset);
-  }
-
-  Future<void> setCharset(Charset charset) async {
-    await ref.read(printAgentStorageProvider).saveCharset(charset.name);
-    state = state.copyWith(charset: charset);
+    final running = await FlutterForegroundTask.isRunningService;
+    state = state.copyWith(hasToken: token != null && token.isNotEmpty, charset: charset, active: running);
   }
 
   Future<void> saveToken(String token) async {
@@ -202,48 +103,80 @@ class PrintBridge extends Notifier<BridgeState> {
   }
 
   Future<void> forget() async {
-    stop();
+    await stop();
     await ref.read(printAgentStorageProvider).clear();
     state = state.copyWith(hasToken: false);
   }
 
-  void start() {
-    if (state.active || !state.hasToken) return;
-    state = state.copyWith(active: true, clearError: true);
-    _timer = Timer.periodic(_interval, (_) => poll());
-    poll(); // primer ciclo inmediato, sin esperar el intervalo
+  Future<void> setCharset(Charset charset) async {
+    await ref.read(printAgentStorageProvider).saveCharset(charset.name);
+    state = state.copyWith(charset: charset);
   }
 
-  void stop() {
-    _timer?.cancel();
-    _timer = null;
-    if (state.active) state = state.copyWith(active: false, busy: false);
+  /// Arranca el servicio en primer plano: sigue imprimiendo aunque la pantalla se apague o la app pase a segundo plano.
+  Future<void> start() async {
+    if (!state.hasToken || await FlutterForegroundTask.isRunningService) return;
+
+    // Permisos: notificación (Android 13+) —sin ella no hay servicio en primer plano— y, en lo posible, salir del
+    // ahorro de batería para que el SO no mate la estación.
+    if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
+      await FlutterForegroundTask.requestNotificationPermission();
+    }
+    await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'comandia_print_bridge',
+        channelName: 'Impresión Comandia',
+        channelDescription: 'Mantiene la impresión activa mientras la estación está encendida.',
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(4000),
+        allowWakeLock: true,
+        allowWifiLock: true,
+        autoRunOnBoot: false,
+      ),
+    );
+
+    final result = await FlutterForegroundTask.startService(
+      serviceId: 8099,
+      serviceTypes: [ForegroundServiceTypes.dataSync],
+      notificationTitle: 'Comandia · imprimiendo',
+      notificationText: 'La estación está lista para imprimir.',
+      callback: startPrintCallback,
+    );
+
+    if (result is ServiceRequestSuccess) {
+      state = state.copyWith(active: true, clearError: true);
+    } else {
+      state = state.copyWith(lastError: 'No se pudo iniciar el servicio de impresión (revisa el permiso de notificaciones).');
+    }
   }
 
-  /// Un ciclo del puente. Reentrante-seguro: si el anterior sigue corriendo, este regresa sin hacer nada.
+  Future<void> stop() async {
+    await FlutterForegroundTask.stopService();
+    state = state.copyWith(active: false, busy: false);
+  }
+
+  /// «Probar ahora»: un ciclo en primer plano, sin el servicio. Confirma token, conexión e impresión.
   Future<void> poll() async {
-    if (_cycleRunning) return;
+    if (_cycleRunning || !state.hasToken) return;
     _cycleRunning = true;
     state = state.copyWith(busy: true);
     try {
-      final dio = ref.read(printAgentClientProvider).dio;
-      final res = await dio.get('/print-agent/jobs/next', queryParameters: {'limit': 5});
-
-      if (res.statusCode == 401 || res.statusCode == 403) {
-        state = state.copyWith(lastError: 'El token del agente no es válido o fue revocado. Vuelve a capturarlo.');
-        stop();
-        return;
-      }
-      if (res.statusCode != 200) {
-        state = state.copyWith(lastError: 'El servidor respondió ${res.statusCode}.');
-        return;
-      }
-
-      final data = (res.data is Map ? res.data['data'] : null) as List? ?? const [];
-      for (final raw in data) {
-        await _handle(PrintJob.fromJson((raw as Map).cast<String, dynamic>()));
+      final pump = PrintPump(
+        dio: ref.read(printAgentClientProvider).dio,
+        store: ref.read(printAgentStorageProvider),
+      );
+      for (final e in await pump.cycle()) {
+        _push(e.title, e.ok, e.detail);
       }
       state = state.copyWith(clearError: true);
+    } on PumpAuthError {
+      state = state.copyWith(lastError: 'El token del agente no es válido o fue revocado. Vuelve a capturarlo.');
+    } on PumpHttpError catch (e) {
+      state = state.copyWith(lastError: 'El servidor respondió ${e.status}.');
     } on DioException catch (e) {
       state = state.copyWith(lastError: 'No se pudo contactar al servidor (${e.type.name}).');
     } catch (e) {
@@ -254,89 +187,9 @@ class PrintBridge extends Notifier<BridgeState> {
     }
   }
 
-  Future<void> _handle(PrintJob job) async {
-    final title = job.printerName == null ? job.kindLabel : '${job.kindLabel} · ${job.printerName}';
-    final store = ref.read(printAgentStorageProvider);
-    try {
-      // Idempotencia: si ya se imprimió (el aviso se perdió y el trabajo reapareció al expirar su reclamo), NO se
-      // reimprime; solo se reintenta el aviso para que el servidor lo cierre.
-      if (await store.isPrinted(job.ulid)) {
-        await _report(job, ok: true);
-        _push(title, true, 'Ya impreso; se reintentó el aviso');
-        return;
-      }
-      if (job.connection != 'network') {
-        const msg = 'Esta app solo imprime por red (LAN).';
-        await _report(job, ok: false, error: 'Conexión no soportada por la app: ${job.connection}. $msg');
-        _push(title, false, '$msg (${job.connection})');
-        return;
-      }
-      final bytes = renderTicket(job.payload, paperWidth: job.paperWidth, charset: state.charset);
-      await _sendTcp(job.target, bytes);
-      // Se marca ANTES de avisar: si el aviso falla, la marca ya evita la reimpresión.
-      await store.markPrinted(job.ulid);
-      await _report(job, ok: true);
-      _push(title, true, 'Impreso');
-    } on _BridgeError catch (e) {
-      await _report(job, ok: false, error: e.message);
-      _push(title, false, e.message);
-    } catch (e) {
-      await _report(job, ok: false, error: '$e');
-      _push(title, false, '$e');
-    }
-  }
-
-  Future<void> _sendTcp(String? target, List<int> bytes) async {
-    final dest = target?.trim() ?? '';
-    if (dest.isEmpty) throw _BridgeError('La impresora no tiene destino configurado.');
-
-    final parts = dest.split(':');
-    final host = parts.first;
-    final port = parts.length > 1 ? (int.tryParse(parts[1]) ?? 9100) : 9100;
-
-    Socket? socket;
-    try {
-      socket = await Socket.connect(host, port, timeout: const Duration(seconds: 8));
-      socket.add(bytes);
-      await socket.flush();
-    } on SocketException catch (e) {
-      throw _BridgeError('No se pudo conectar a $host:$port (${e.osError?.message ?? 'sin ruta'}).');
-    } finally {
-      await socket?.close();
-      socket?.destroy();
-    }
-  }
-
-  Future<void> _report(PrintJob job, {required bool ok, String? error}) async {
-    final dio = ref.read(printAgentClientProvider).dio;
-    try {
-      if (ok) {
-        await dio.post('/print-agent/jobs/${job.ulid}/printed');
-      } else {
-        await dio.post('/print-agent/jobs/${job.ulid}/failed', data: {'error': _clampError(error)});
-      }
-    } catch (_) {
-      // Si el reporte falla, el servidor mantiene el trabajo reclamado hasta que su reclamo expire y lo vuelve a
-      // ofrecer; el puente lo reintentará. Perder el reporte no pierde el trabajo. (Deuda v1: puede reimprimir.)
-    }
-  }
-
-  /// El servidor exige el motivo entre 3 y 300 caracteres.
-  String _clampError(String? error) {
-    final msg = (error ?? '').trim();
-    if (msg.length < 3) return 'Error desconocido';
-    return msg.length > 300 ? msg.substring(0, 300) : msg;
-  }
-
   void _push(String title, bool ok, String detail) {
-    final entry = JobLog(title: title, ok: ok, detail: detail, at: DateTime.now());
-    state = state.copyWith(log: [entry, ...state.log].take(30).toList());
+    state = state.copyWith(log: [JobLog(title: title, ok: ok, detail: detail, at: DateTime.now()), ...state.log].take(30).toList());
   }
-}
-
-class _BridgeError implements Exception {
-  _BridgeError(this.message);
-  final String message;
 }
 
 final printBridgeProvider = NotifierProvider<PrintBridge, BridgeState>(PrintBridge.new);
