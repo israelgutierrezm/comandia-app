@@ -201,6 +201,24 @@ class ChargeError implements Exception {
   String toString() => message;
 }
 
+/// Una mesa del salón. `label` es el nombre o, si no hay, el código. El listado con `available_only` ya deja solo las
+/// libres (ni ocupadas ni unidas a otra), así que en la app basta con abrir la que se toque.
+class RestaurantTable {
+  RestaurantTable({required this.ulid, required this.label, this.seats, this.zoneName});
+
+  final String ulid;
+  final String label;
+  final int? seats;
+  final String? zoneName;
+
+  factory RestaurantTable.fromJson(Map<String, dynamic> d) => RestaurantTable(
+        ulid: d['ulid'] as String,
+        label: (d['name'] ?? d['code'] ?? '—') as String,
+        seats: d['seats'] as int?,
+        zoneName: (d['zone'] as Map?)?['name'] as String?,
+      );
+}
+
 // ---------------------------------------------------------------------------
 // Repositorio
 // ---------------------------------------------------------------------------
@@ -222,6 +240,25 @@ class PosRepository {
   Future<AccountSummary> openTakeout() async {
     final branch = await _storage.readBranch();
     final res = await _api.dio.post<dynamic>('/pos-accounts', data: {'branch_ulid': branch, 'takeout': true});
+    _created(res.statusCode, 'abrir la cuenta');
+    return AccountSummary.fromJson(_map(res.data));
+  }
+
+  /// Las mesas LIBRES de la sucursal activa (`available_only` excluye ocupadas y unidas).
+  Future<List<RestaurantTable>> availableTables() async {
+    final branch = await _storage.readBranch();
+    final res = await _api.dio.get<dynamic>('/restaurant-tables', queryParameters: {
+      'available_only': 1,
+      'per_page': 100,
+      'branch': ?branch,
+    });
+    _ok(res.statusCode, 'las mesas');
+    return _list(res.data).map((e) => RestaurantTable.fromJson(e)).toList();
+  }
+
+  /// Abre una cuenta en una mesa. La sucursal la toma el servidor del salón donde está la mesa.
+  Future<AccountSummary> openTable(String tableUlid) async {
+    final res = await _api.dio.post<dynamic>('/pos-accounts', data: {'table_ulid': tableUlid});
     _created(res.statusCode, 'abrir la cuenta');
     return AccountSummary.fromJson(_map(res.data));
   }
@@ -311,6 +348,10 @@ final posRepositoryProvider = Provider<PosRepository>(
 
 final openAccountsProvider = FutureProvider.autoDispose<List<AccountSummary>>(
   (ref) => ref.watch(posRepositoryProvider).openAccounts(),
+);
+
+final availableTablesProvider = FutureProvider.autoDispose<List<RestaurantTable>>(
+  (ref) => ref.watch(posRepositoryProvider).availableTables(),
 );
 
 final catalogProvider = FutureProvider.autoDispose<List<CatalogArticle>>(

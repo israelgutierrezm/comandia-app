@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'account_screen.dart';
+import 'open_account_screen.dart';
 import 'pos.dart';
 
 class AccountsTab extends ConsumerWidget {
@@ -25,7 +26,7 @@ class AccountsTab extends ConsumerWidget {
           ),
         ),
         data: (accounts) => accounts.isEmpty
-            ? const Center(child: Text('No hay cuentas abiertas.\nAbre una para llevar.', textAlign: TextAlign.center))
+            ? const Center(child: Text('No hay cuentas abiertas.\nAbre una en mesa o para llevar.', textAlign: TextAlign.center))
             : RefreshIndicator(
                 onRefresh: () async => ref.invalidate(openAccountsProvider),
                 child: ListView.separated(
@@ -49,24 +50,12 @@ class AccountsTab extends ConsumerWidget {
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openTakeout(context, ref),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const OpenAccountScreen()),
+        ),
         icon: const Icon(Icons.add),
-        label: const Text('Para llevar'),
+        label: const Text('Abrir cuenta'),
       ),
     );
-  }
-
-  Future<void> _openTakeout(BuildContext context, WidgetRef ref) async {
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final account = await ref.read(posRepositoryProvider).openTakeout();
-      ref.invalidate(openAccountsProvider);
-      navigator.push(
-        MaterialPageRoute(builder: (_) => AccountScreen(ulid: account.ulid, title: account.displayName)),
-      );
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('No se pudo abrir la cuenta.')));
-    }
   }
 }
