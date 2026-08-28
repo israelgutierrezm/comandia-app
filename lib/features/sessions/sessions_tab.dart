@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../pos/pos.dart' show permissionsProvider;
 import '../supervision/supervision.dart' show CutMethod;
+import 'caja_screens.dart';
 import 'sessions.dart';
 
 class SessionsTab extends ConsumerWidget {
@@ -21,6 +23,16 @@ class SessionsTab extends ConsumerWidget {
               _chip(ref, status, 'open', 'Abiertos'),
               const SizedBox(width: 8),
               _chip(ref, status, 'closed', 'Cerrados'),
+              const Spacer(),
+              // Abrir turno necesita listar terminales (organization.terminals.view): en la práctica, el gerente.
+              if (ref.watch(permissionsProvider).valueOrNull?.contains('organization.terminals.view') ?? false)
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const OpenSessionScreen()),
+                  ),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Abrir turno'),
+                ),
             ],
           ),
         ),
@@ -102,6 +114,17 @@ class SessionDetailScreen extends ConsumerWidget {
               ),
             ),
           ),
+          if (session.status == 'open' &&
+              (ref.watch(permissionsProvider).valueOrNull?.contains('pos.sessions.close') ?? false)) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => CloseSessionScreen(session: session)),
+              ),
+              icon: const Icon(Icons.lock_outline),
+              label: const Text('Cerrar turno'),
+            ),
+          ],
           const SizedBox(height: 16),
           Card(
             child: Padding(

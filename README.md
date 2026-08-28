@@ -9,6 +9,7 @@ Consume la misma **API v1** del monolito (`/api/v1`) y se autentica por **token*
 Los tres roles de la Iteración 9 están completos:
 
 - **Supervisión** — contexto de sesión, caja abierta del turno y su corte, turnos y reportes.
+- **Caja** — abrir turno (terminal + fondo, gerente) y cerrar turno (declarar efectivo por método → cierre → corte).
 - **Captura** — abrir cuenta **en mesa** (salón por zonas) o para llevar, marcado de 1 toque, comandar.
 - **Cobro** — pagar una cuenta (uno o varios métodos, recibido/cambio, referencia, propina); al saldar, Comandia emite el ticket final que imprime por el puente.
 - **Puente de impresión** — la app como agente ESC/POS: sondea trabajos y los manda por TCP a las impresoras de red. Con **páginas de códigos** (CP850/CP1252/ASCII), **idempotencia** (no reimprime un trabajo ya impreso) y **estación desatendida** (servicio en primer plano: sigue imprimiendo con la pantalla apagada o la app en segundo plano).
