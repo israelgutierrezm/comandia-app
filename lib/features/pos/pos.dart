@@ -236,6 +236,13 @@ class ChargeError implements Exception {
   String toString() => message;
 }
 
+/// La operación es válida pero exige la firma de otra persona por PIN (409 `authorization_required`, D170/ADR-008).
+/// Quien la recibe abre el diálogo del PIN, canjea el PIN por un token en `/authorizations` y reintenta con él.
+class NeedsAuthorization implements Exception {
+  const NeedsAuthorization(this.permission);
+  final String permission;
+}
+
 /// Una mesa del salón. `label` es el nombre o, si no hay, el código. El listado con `available_only` ya deja solo las
 /// libres (ni ocupadas ni unidas a otra), así que en la app basta con abrir la que se toque.
 class RestaurantTable {
@@ -374,6 +381,47 @@ class PosRepository {
     }
     _created(res.statusCode, 'cobrar');
     return Account.fromJson(_map(res.data));
+  }
+
+  /// Aplica un descuento (a la cuenta o a una línea). Puede exigir PIN: si el servidor responde 409
+  /// `authorization_required`, lanza [NeedsAuthorization] para que la UI pida el PIN y reintente con el token.
+  Future<Account> discount(
+    String ulid,
+    dynamic version, {
+    required String kind,
+    String? value,
+    required String reason,
+    String? itemUlid,
+    String? authorizationToken,
+  }) async {
+    final res = await _api.dio.post<dynamic>('/pos-accounts/$ulid/discounts', data: {
+      'version': version,
+      'kind': kind,
+      if (value != null && value.isNotEmpty) 'value': value,
+      'reason': reason,
+      'item_ulid': ?itemUlid,
+      'authorization_token': ?authorizationToken,
+    });
+    if (res.statusCode == 409 && res.data is Map && res.data['type'] == 'authorization_required') {
+      throw NeedsAuthorization('${res.data['required_permission'] ?? ''}');
+    }
+    if (res.statusCode == 409) throw const StaleAccount();
+    if (res.statusCode == 422) {
+      final msg = (res.data is Map ? res.data['message'] : null) as String?;
+      throw ChargeError(msg ?? 'No se pudo aplicar el descuento.');
+    }
+    _created(res.statusCode, 'aplicar el descuento');
+    return Account.fromJson(_map(res.data));
+  }
+
+  /// Canjea un PIN por un token de autorización de un solo uso (D170). Lanza [ChargeError] con el mensaje si falla.
+  Future<String> authorize(String pin, String permission) async {
+    final res = await _api.dio.post<dynamic>('/authorizations', data: {'pin': pin, 'permission': permission});
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      final msg = (res.data is Map ? res.data['message'] : null) as String?;
+      throw ChargeError(msg ?? 'PIN incorrecto.');
+    }
+    return _map(res.data)['token'] as String;
   }
 
   List<Map<String, dynamic>> _list(dynamic body) {

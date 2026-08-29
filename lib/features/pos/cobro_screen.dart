@@ -20,6 +20,9 @@ class CobroScreen extends ConsumerStatefulWidget {
 }
 
 class _CobroScreenState extends ConsumerState<CobroScreen> {
+  // Copia local de la cuenta: el descuento cambia totales y versión, así que se refresca sin salir del cobro.
+  late Account _account = widget.account;
+
   final List<PaymentLine> _lines = [];
 
   PaymentMethod? _method;
@@ -27,6 +30,12 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
   final _tendered = TextEditingController();
   final _reference = TextEditingController();
   final _tip = TextEditingController();
+
+  // Descuento (puede exigir PIN).
+  bool _showDiscount = false;
+  String _discountKind = 'percentage';
+  final _discountValue = TextEditingController();
+  final _discountReason = TextEditingController();
 
   bool _sending = false;
 
@@ -36,10 +45,12 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
     _tendered.dispose();
     _reference.dispose();
     _tip.dispose();
+    _discountValue.dispose();
+    _discountReason.dispose();
     super.dispose();
   }
 
-  double get _due => _parse(widget.account.totals['due'] ?? widget.account.totals['total']) ?? 0;
+  double get _due => _parse(_account.totals['due'] ?? _account.totals['total']) ?? 0;
   double get _staged => _lines.fold(0, (s, l) => s + (_parse(l.amount) ?? 0));
   double get _remaining {
     final r = _due - _staged;
@@ -118,8 +129,8 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
     final navigator = Navigator.of(context);
 
     try {
-      final updated = await ref.read(posRepositoryProvider).charge(widget.account.ulid, widget.account.version, payments);
-      ref.invalidate(accountProvider(widget.account.ulid));
+      final updated = await ref.read(posRepositoryProvider).charge(_account.ulid, _account.version, payments);
+      ref.invalidate(accountProvider(_account.ulid));
       ref.invalidate(openAccountsProvider);
 
       final due = _parse(updated.totals['due']) ?? 0;
@@ -131,7 +142,7 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
         navigator.pop();
       }
     } on StaleAccount {
-      ref.invalidate(accountProvider(widget.account.ulid));
+      ref.invalidate(accountProvider(_account.ulid));
       messenger.showSnackBar(const SnackBar(content: Text('La cuenta cambió en otra terminal; ábrela de nuevo para cobrar.')));
       if (mounted) Navigator.of(context).pop();
     } on ChargeError catch (e) {
@@ -167,13 +178,110 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
     );
   }
 
+  Future<void> _reload() async {
+    try {
+      final fresh = await ref.read(posRepositoryProvider).account(_account.ulid);
+      if (mounted) setState(() => _account = fresh);
+      ref.invalidate(accountProvider(_account.ulid));
+    } catch (_) {
+      // Si la recarga falla, se conserva lo que había; el siguiente intento la trae.
+    }
+  }
+
+  /// Pide el PIN de quien autoriza (D170). Lo teclea la PERSONA en el dispositivo; devuelve null si cancela.
+  Future<String?> _askPin() async {
+    final ctrl = TextEditingController();
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Autorización por PIN'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'PIN de quien autoriza'),
+          onSubmitted: (v) => Navigator.pop(dialogCtx, v.trim()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(dialogCtx, ctrl.text.trim()), child: const Text('Autorizar')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    return (value == null || value.isEmpty) ? null : value;
+  }
+
+  Future<void> _applyDiscount() async {
+    final kind = _discountKind;
+    final reason = _discountReason.text.trim();
+    final value = _discountValue.text.trim();
+
+    if (reason.length < 3) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El descuento necesita un motivo (mín. 3 letras).')));
+      return;
+    }
+    if (kind != 'courtesy' && (_parse(value) ?? 0) <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Captura un valor de descuento válido.')));
+      return;
+    }
+
+    setState(() => _sending = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final repo = ref.read(posRepositoryProvider);
+
+    Future<Account> attempt([String? token]) => repo.discount(
+          _account.ulid,
+          _account.version,
+          kind: kind,
+          value: kind == 'courtesy' ? null : value,
+          reason: reason,
+          authorizationToken: token,
+        );
+
+    void applied(Account updated, String msg) {
+      if (mounted) {
+        setState(() {
+          _account = updated;
+          _showDiscount = false;
+          _discountValue.clear();
+          _discountReason.clear();
+          if (_method != null && _remaining > 0) _amount.text = _fmt(_remaining);
+        });
+      }
+      ref.invalidate(accountProvider(_account.ulid));
+      messenger.showSnackBar(SnackBar(content: Text(msg)));
+    }
+
+    try {
+      try {
+        applied(await attempt(), 'Descuento aplicado.');
+      } on NeedsAuthorization catch (e) {
+        final pin = await _askPin();
+        if (pin == null) return; // cancelado
+        final token = await repo.authorize(pin, e.permission);
+        applied(await attempt(token), 'Descuento autorizado y aplicado.');
+      }
+    } on StaleAccount {
+      await _reload();
+      messenger.showSnackBar(const SnackBar(content: Text('La cuenta cambió; se recargó.')));
+    } on ChargeError catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('No se pudo aplicar el descuento.')));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final methods = ref.watch(paymentMethodsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: Text('Cobrar · ${widget.account.displayName}')),
+      appBar: AppBar(title: Text('Cobrar · ${_account.displayName}')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -182,13 +290,15 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  _totalRow(context, 'Total', widget.account.totals['total']),
+                  _totalRow(context, 'Total', _account.totals['total']),
                   const SizedBox(height: 4),
                   _totalRow(context, 'Falta', _fmt(_remaining), strong: true),
                 ],
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          _discountSection(context),
           if (_lines.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text('Pagos', style: theme.textTheme.titleMedium),
@@ -298,6 +408,78 @@ class _CobroScreenState extends ConsumerState<CobroScreen> {
               : const Text('Cobrar'),
         ),
       ],
+    );
+  }
+
+  Widget _discountSection(BuildContext context) {
+    final theme = Theme.of(context);
+    final applied = _parse(_account.totals['discount_total']) ?? 0;
+
+    if (! _showDiscount) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: _sending ? null : () => setState(() => _showDiscount = true),
+          icon: const Icon(Icons.percent),
+          label: Text(applied > 0 ? 'Descuento: ${_money(_account.totals['discount_total'])}' : 'Agregar descuento'),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Descuento', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final k in const [
+                  ['percentage', 'Porcentaje'],
+                  ['amount', 'Monto'],
+                  ['courtesy', 'Cortesía'],
+                ])
+                  ChoiceChip(
+                    label: Text(k[1]),
+                    selected: _discountKind == k[0],
+                    onSelected: (_) => setState(() => _discountKind = k[0]),
+                  ),
+              ],
+            ),
+            if (_discountKind != 'courtesy') ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: _discountValue,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                decoration: InputDecoration(
+                  labelText: _discountKind == 'percentage' ? 'Porcentaje' : 'Monto',
+                  prefixText: _discountKind == 'percentage' ? null : '\$ ',
+                  suffixText: _discountKind == 'percentage' ? '%' : null,
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            TextField(
+              controller: _discountReason,
+              maxLength: 300,
+              decoration: const InputDecoration(labelText: 'Motivo', border: OutlineInputBorder(), isDense: true),
+            ),
+            Row(
+              children: [
+                TextButton(onPressed: _sending ? null : () => setState(() => _showDiscount = false), child: const Text('Cancelar')),
+                const Spacer(),
+                FilledButton(onPressed: _sending ? null : _applyDiscount, child: const Text('Aplicar')),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 

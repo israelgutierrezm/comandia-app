@@ -135,5 +135,61 @@ void main() {
         throwsA(isA<ChargeError>().having((e) => e.message, 'mensaje', contains('excede'))),
       );
     });
+
+    test('discount lanza NeedsAuthorization en 409 authorization_required', () async {
+      final adapter = _FakeAdapter(
+        (o) => _json({'type': 'authorization_required', 'required_permission': 'pos.discounts.apply'}, 409),
+      );
+      await expectLater(
+        buildRepo(adapter).discount('A1', 3, kind: 'percentage', value: '10', reason: 'Cliente frecuente'),
+        throwsA(isA<NeedsAuthorization>().having((e) => e.permission, 'permiso', 'pos.discounts.apply')),
+      );
+    });
+
+    test('discount postea el descuento (con token) y devuelve la cuenta', () async {
+      RequestOptions? got;
+      final adapter = _FakeAdapter((o) {
+        got = o;
+        return _json({
+          'data': {
+            'ulid': 'A1',
+            'display_name': 'Mesa 1',
+            'folio': 'A-1',
+            'status': 'open',
+            'status_label': 'Abierta',
+            'version': 4,
+            'accepts_items': true,
+            'totals': {'discount_total': '20.00', 'due': '80.00'},
+            'items': [],
+            'orders': [],
+          },
+        }, 200);
+      });
+
+      final acc = await buildRepo(adapter)
+          .discount('A1', 3, kind: 'amount', value: '20.00', reason: 'Cortesía del gerente', authorizationToken: 'TKN-1');
+
+      expect(acc.totals['discount_total'], '20.00');
+      expect(got!.data['kind'], 'amount');
+      expect(got!.data['reason'], 'Cortesía del gerente');
+      expect(got!.data['authorization_token'], 'TKN-1');
+    });
+
+    test('authorize canjea el PIN por un token', () async {
+      RequestOptions? got;
+      final adapter = _FakeAdapter((o) {
+        got = o;
+        return _json({
+          'data': {'token': 'TKN-1', 'authorized_by': {'name': 'Gerente'}},
+        }, 200);
+      });
+
+      final token = await buildRepo(adapter).authorize('1234', 'pos.discounts.apply');
+
+      expect(token, 'TKN-1');
+      expect(got!.path, '/authorizations');
+      expect(got!.data['pin'], '1234');
+      expect(got!.data['permission'], 'pos.discounts.apply');
+    });
   });
 }
