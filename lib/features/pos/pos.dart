@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_client.dart';
+import '../../core/config.dart';
 import '../../core/providers.dart';
 import '../../core/token_storage.dart';
 
@@ -9,7 +10,7 @@ import '../../core/token_storage.dart';
 // ---------------------------------------------------------------------------
 
 class CatalogArticle {
-  CatalogArticle({required this.ulid, required this.name, this.basePrice, this.categoryUlid, this.categoryName});
+  CatalogArticle({required this.ulid, required this.name, this.basePrice, this.categoryUlid, this.categoryName, this.imageUrl});
 
   final String ulid;
   final String name;
@@ -17,12 +18,40 @@ class CatalogArticle {
   final String? categoryUlid;
   final String? categoryName;
 
-  factory CatalogArticle.fromJson(Map<String, dynamic> d) => CatalogArticle(
+  /// URL ABSOLUTA de la foto de portada, o `null`. El servidor la da como ruta relativa (`/storage/...`); aquí se le
+  /// antepone la base para que `Image.network` la resuelva.
+  final String? imageUrl;
+
+  factory CatalogArticle.fromJson(Map<String, dynamic> d) {
+    final path = d['image_url'] as String?;
+    return CatalogArticle(
+      ulid: d['ulid'] as String,
+      name: (d['display_name'] ?? d['name'] ?? '—') as String,
+      basePrice: d['base_price'] as String?,
+      categoryUlid: d['category']?['ulid'] as String?,
+      categoryName: d['category']?['name'] as String?,
+      imageUrl: (path == null || path.isEmpty) ? null : '${AppConfig.apiBaseUrl}$path',
+    );
+  }
+}
+
+/// Una categoría del catálogo con sus subcategorías (árbol de 2 niveles). El POS usa las de nivel 1 como pestañas y sus
+/// `children` (nivel 2) como chips de subcategoría.
+class PosCategory {
+  PosCategory({required this.ulid, required this.name, required this.level, this.children = const []});
+
+  final String ulid;
+  final String name;
+  final int level;
+  final List<PosCategory> children;
+
+  factory PosCategory.fromJson(Map<String, dynamic> d) => PosCategory(
         ulid: d['ulid'] as String,
-        name: (d['display_name'] ?? d['name'] ?? '—') as String,
-        basePrice: d['base_price'] as String?,
-        categoryUlid: d['category']?['ulid'] as String?,
-        categoryName: d['category']?['name'] as String?,
+        name: (d['name'] ?? '—') as String,
+        level: (d['level'] ?? 1) as int,
+        children: ((d['children'] as List?) ?? const [])
+            .map((e) => PosCategory.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
       );
 }
 
@@ -273,6 +302,13 @@ class PosRepository {
     return _list(res.data).map((e) => CatalogArticle.fromJson(e)).toList();
   }
 
+  /// El árbol de categorías (nivel 1 con sus subcategorías nivel 2), para las pestañas y chips del POS.
+  Future<List<PosCategory>> categories() async {
+    final res = await _api.dio.get<dynamic>('/article-categories');
+    _ok(res.statusCode, 'las categorías');
+    return _list(res.data).map((e) => PosCategory.fromJson(e)).toList();
+  }
+
   Future<Account> account(String ulid) async {
     final res = await _api.dio.get<dynamic>('/pos-accounts/$ulid');
     _ok(res.statusCode, 'la cuenta');
@@ -356,6 +392,10 @@ final availableTablesProvider = FutureProvider.autoDispose<List<RestaurantTable>
 
 final catalogProvider = FutureProvider.autoDispose<List<CatalogArticle>>(
   (ref) => ref.watch(posRepositoryProvider).catalog(),
+);
+
+final categoriesProvider = FutureProvider.autoDispose<List<PosCategory>>(
+  (ref) => ref.watch(posRepositoryProvider).categories(),
 );
 
 final accountProvider = FutureProvider.autoDispose.family<Account, String>(

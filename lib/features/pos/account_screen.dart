@@ -58,12 +58,14 @@ class _MarcarTab extends ConsumerStatefulWidget {
 
 class _MarcarTabState extends ConsumerState<_MarcarTab> {
   String _search = '';
-  String? _category;
+  String? _topCategory; // categoría de nivel 1 (pestaña); null = todas
+  String? _subCategory; // subcategoría de nivel 2 (chip); null = todas dentro del top
   bool _sending = false;
 
   @override
   Widget build(BuildContext context) {
     final catalog = ref.watch(catalogProvider);
+    final cats = ref.watch(categoriesProvider).valueOrNull ?? const <PosCategory>[];
     final cart = ref.watch(captureCartProvider(widget.account.ulid));
 
     return catalog.when(
@@ -79,17 +81,26 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
         ),
       ),
       data: (articles) {
-        final categories = <String, String>{};
-        for (final a in articles) {
-          if (a.categoryUlid != null) categories[a.categoryUlid!] = a.categoryName ?? '—';
+        // Cada artículo cuelga de una categoría (nivel 1 o 2). Este mapa lleva de cualquier categoría a su nivel 1,
+        // para poder filtrar por pestaña aunque el artículo esté en una subcategoría.
+        final topOf = <String, String>{};
+        for (final top in cats) {
+          topOf[top.ulid] = top.ulid;
+          for (final sub in top.children) {
+            topOf[sub.ulid] = top.ulid;
+          }
         }
 
         final q = _search.trim().toLowerCase();
         final filtered = articles.where((a) {
-          final inCat = _category == null || a.categoryUlid == _category;
+          final top = a.categoryUlid == null ? null : topOf[a.categoryUlid];
+          final inTop = _topCategory == null || top == _topCategory;
+          final inSub = _subCategory == null || a.categoryUlid == _subCategory;
           final match = q.isEmpty || a.name.toLowerCase().contains(q);
-          return inCat && match;
+          return inTop && inSub && match;
         }).toList();
+
+        final subs = _subsOf(_topCategory, cats);
 
         return Column(
           children: [
@@ -100,15 +111,27 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
                 onChanged: (v) => setState(() => _search = v),
               ),
             ),
-            if (categories.isNotEmpty)
+            if (cats.isNotEmpty)
               SizedBox(
                 height: 44,
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   children: [
-                    _cat(null, 'Todas'),
-                    for (final e in categories.entries) _cat(e.key, e.value),
+                    _topChip(null, 'Todas'),
+                    for (final c in cats) _topChip(c.ulid, c.name),
+                  ],
+                ),
+              ),
+            if (subs.isNotEmpty)
+              SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  children: [
+                    _subChip(null, 'Todos'),
+                    for (final s in subs) _subChip(s.ulid, s.name),
                   ],
                 ),
               ),
@@ -118,15 +141,15 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
                   : GridView.builder(
                       padding: const EdgeInsets.all(12),
                       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 160,
-                        mainAxisExtent: 78,
-                        crossAxisSpacing: 8,
-                        mainAxisSpacing: 8,
+                        maxCrossAxisExtent: 180,
+                        mainAxisExtent: 196,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
                       ),
                       itemCount: filtered.length,
                       itemBuilder: (_, i) => _ProductCard(
                         article: filtered[i],
-                        onTap: () => ref.read(captureCartProvider(widget.account.ulid).notifier).add(filtered[i]),
+                        onAdd: () => ref.read(captureCartProvider(widget.account.ulid).notifier).add(filtered[i]),
                       ),
                     ),
             ),
@@ -137,12 +160,34 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
     );
   }
 
-  Widget _cat(String? value, String label) => Padding(
+  /// Las subcategorías (nivel 2) de la categoría de nivel 1 seleccionada; vacío si no hay top o no tiene hijas.
+  List<PosCategory> _subsOf(String? topUlid, List<PosCategory> cats) {
+    if (topUlid == null) return const [];
+    for (final c in cats) {
+      if (c.ulid == topUlid) return c.children;
+    }
+    return const [];
+  }
+
+  Widget _topChip(String? value, String label) => Padding(
         padding: const EdgeInsets.only(right: 8),
         child: ChoiceChip(
           label: Text(label),
-          selected: _category == value,
-          onSelected: (_) => setState(() => _category = value),
+          selected: _topCategory == value,
+          // Cambiar de pestaña reinicia la subcategoría: los chips de abajo son de OTRA categoría.
+          onSelected: (_) => setState(() {
+            _topCategory = value;
+            _subCategory = null;
+          }),
+        ),
+      );
+
+  Widget _subChip(String? value, String label) => Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(label),
+          selected: _subCategory == value,
+          onSelected: (_) => setState(() => _subCategory = value),
         ),
       );
 
@@ -171,29 +216,87 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
 }
 
 class _ProductCard extends StatelessWidget {
-  const _ProductCard({required this.article, required this.onTap});
+  const _ProductCard({required this.article, required this.onAdd});
   final CatalogArticle article;
-  final VoidCallback onTap;
+  final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    // Tocar la tarjeta O el «+» marca el artículo: en una pantalla táctil, cualquiera de los dos es lo natural.
     return Card(
       margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(article.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              Text(_money(article.basePrice), style: TextStyle(color: Theme.of(context).colorScheme.outline, fontSize: 12)),
-            ],
-          ),
+        onTap: onAdd,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _Photo(url: article.imageUrl)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(article.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        const SizedBox(height: 2),
+                        Text(_money(article.basePrice), style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w700, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  Material(
+                    color: theme.colorScheme.primary,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: onAdd,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(Icons.add, size: 20, color: theme.colorScheme.onPrimary),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// La foto de un artículo: cubre el espacio; con caída elegante a un ícono cuando no hay foto o la descarga falla.
+class _Photo extends StatelessWidget {
+  const _Photo({required this.url});
+  final String? url;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final placeholder = ColoredBox(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Icon(Icons.restaurant_menu, color: theme.colorScheme.outline, size: 28),
+    );
+
+    if (url == null) return placeholder;
+
+    return Image.network(
+      url!,
+      fit: BoxFit.cover,
+      width: double.infinity,
+      errorBuilder: (_, _, _) => placeholder,
+      loadingBuilder: (context, child, progress) => progress == null
+          ? child
+          : ColoredBox(
+              color: theme.colorScheme.surfaceContainerHighest,
+              child: const Center(child: SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))),
+            ),
     );
   }
 }
