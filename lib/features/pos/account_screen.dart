@@ -371,6 +371,17 @@ class _CuentaTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Chip(
+            label: Text(account.statusLabel),
+            visualDensity: VisualDensity.compact,
+            backgroundColor: account.status == 'open'
+                ? null
+                : Theme.of(context).colorScheme.secondaryContainer,
+          ),
+        ),
+        const SizedBox(height: 12),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -419,18 +430,8 @@ class _CuentaTab extends ConsumerWidget {
             ),
           ),
         ),
-        // «Cobrar» solo si el rol activo puede (pos.accounts.charge) y queda saldo. El servidor sigue decidiendo.
-        if ((ref.watch(permissionsProvider).valueOrNull?.contains('pos.accounts.charge') ?? false) &&
-            (double.tryParse(account.totals['due'] ?? '0') ?? 0) > 0) ...[
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => CobroScreen(account: account)),
-            ),
-            icon: const Icon(Icons.payments),
-            label: Text('Cobrar ${_money(account.totals['due'])}'),
-          ),
-        ],
+        // Acciones según el estado (Fase 3): marcar → pedir la cuenta → cobrar. El servidor sigue decidiendo.
+        ..._actions(context, ref),
         if (pending.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text('Comandar', style: Theme.of(context).textTheme.titleMedium),
@@ -472,6 +473,81 @@ class _CuentaTab extends ConsumerWidget {
       messenger.showSnackBar(const SnackBar(content: Text('La cuenta cambió en otra terminal; se recargó.')));
     } catch (_) {
       messenger.showSnackBar(const SnackBar(content: Text('No se pudo comandar.')));
+    }
+  }
+
+  /// Los botones según el estado del ciclo de vida (Fase 3). El servidor es la autoridad; esto solo ofrece el paso que
+  /// toca y oculta lo que el rol no puede.
+  List<Widget> _actions(BuildContext context, WidgetRef ref) {
+    final perms = ref.watch(permissionsProvider).valueOrNull ?? const <String>{};
+    final due = double.tryParse(account.totals['due'] ?? '0') ?? 0;
+    final status = account.status;
+    final widgets = <Widget>[];
+
+    // Abierta: el «cierre de cuenta» — pedir la cuenta antes de cobrar.
+    if (status == 'open' && perms.contains('pos.accounts.request_bill')) {
+      widgets.add(FilledButton.icon(
+        onPressed: () => _requestBill(context, ref),
+        icon: const Icon(Icons.receipt_long),
+        label: const Text('Pedir la cuenta'),
+      ));
+    }
+
+    // Solicitada/Cerrada: cobrar y, si hace falta, reabrir para volver a marcar.
+    if (status == 'bill_requested' || status == 'closed') {
+      if (perms.contains('pos.accounts.charge') && due > 0) {
+        widgets.add(FilledButton.icon(
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CobroScreen(account: account))),
+          icon: const Icon(Icons.payments),
+          label: Text('Cobrar ${_money(account.totals['due'])}'),
+        ));
+      }
+      if (perms.contains('pos.accounts.reopen')) {
+        widgets.add(OutlinedButton.icon(
+          onPressed: () => _reopen(context, ref),
+          icon: const Icon(Icons.lock_open_outlined),
+          label: const Text('Reabrir para marcar'),
+        ));
+      }
+    }
+
+    if (widgets.isEmpty) return const [];
+
+    return [
+      const SizedBox(height: 16),
+      for (final w in widgets)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: SizedBox(width: double.infinity, child: w),
+        ),
+    ];
+  }
+
+  Future<void> _requestBill(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(posRepositoryProvider).requestBill(account.ulid, account.version);
+      ref.invalidate(accountProvider(account.ulid));
+      messenger.showSnackBar(const SnackBar(content: Text('Cuenta solicitada. Ya se puede cobrar.')));
+    } on StaleAccount {
+      ref.invalidate(accountProvider(account.ulid));
+      messenger.showSnackBar(const SnackBar(content: Text('La cuenta cambió en otra terminal; se recargó.')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('No se pudo pedir la cuenta.')));
+    }
+  }
+
+  Future<void> _reopen(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(posRepositoryProvider).reopen(account.ulid, account.version);
+      ref.invalidate(accountProvider(account.ulid));
+      messenger.showSnackBar(const SnackBar(content: Text('Cuenta reabierta.')));
+    } on StaleAccount {
+      ref.invalidate(accountProvider(account.ulid));
+      messenger.showSnackBar(const SnackBar(content: Text('La cuenta cambió en otra terminal; se recargó.')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('No se pudo reabrir.')));
     }
   }
 }

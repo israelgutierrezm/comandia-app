@@ -122,6 +122,7 @@ class Account {
     required this.ulid,
     required this.displayName,
     required this.folio,
+    required this.status,
     required this.statusLabel,
     required this.version,
     required this.acceptsItems,
@@ -133,6 +134,10 @@ class Account {
   final String ulid;
   final String displayName;
   final String folio;
+
+  /// Estado crudo del ciclo de vida: `open` | `bill_requested` | `closed` | `paid` | `cancelled`. Manda los pasos del
+  /// flujo (marcar → pedir la cuenta → cobrar).
+  final String status;
   final String statusLabel;
   final dynamic version;
   final bool acceptsItems;
@@ -146,6 +151,7 @@ class Account {
       ulid: d['ulid'] as String,
       displayName: (d['display_name'] ?? '—') as String,
       folio: (d['folio'] ?? '—') as String,
+      status: (d['status'] ?? 'open') as String,
       statusLabel: (d['status_label'] ?? '—') as String,
       version: d['version'],
       acceptsItems: (d['accepts_items'] ?? false) as bool,
@@ -332,6 +338,20 @@ class PosRepository {
     final res = await _api.dio.post<dynamic>('/pos-accounts/$ulid/orders/$orderUlid/command', data: {'version': version});
     if (res.statusCode == 409) throw const StaleAccount();
     _created(res.statusCode, 'comandar');
+  }
+
+  /// Pedir la cuenta (Abierta → «Cuenta solicitada»): el paso de «cerrar cuenta» antes de cobrar. Reabrible.
+  Future<void> requestBill(String ulid, dynamic version) async {
+    final res = await _api.dio.post<dynamic>('/pos-accounts/$ulid/bill-request', data: {'version': version});
+    if (res.statusCode == 409) throw const StaleAccount();
+    _created(res.statusCode, 'pedir la cuenta');
+  }
+
+  /// Reabrir una cuenta solicitada/cerrada para volver a marcar.
+  Future<void> reopen(String ulid, dynamic version) async {
+    final res = await _api.dio.post<dynamic>('/pos-accounts/$ulid/reopen', data: {'version': version});
+    if (res.statusCode == 409) throw const StaleAccount();
+    _created(res.statusCode, 'reabrir');
   }
 
   Future<List<PaymentMethod>> paymentMethods() async {
