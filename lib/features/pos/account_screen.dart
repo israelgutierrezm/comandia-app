@@ -111,7 +111,8 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
                 onChanged: (v) => setState(() => _search = v),
               ),
             ),
-            if (cats.isNotEmpty)
+            if (cats.isNotEmpty) ...[
+              _gridLabel(context, 'Clasificación'),
               SizedBox(
                 height: 44,
                 child: ListView(
@@ -123,7 +124,9 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
                   ],
                 ),
               ),
-            if (subs.isNotEmpty)
+            ],
+            if (subs.isNotEmpty) ...[
+              _gridLabel(context, 'Subclasificación'),
               SizedBox(
                 height: 40,
                 child: ListView(
@@ -135,6 +138,7 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
                   ],
                 ),
               ),
+            ],
             Expanded(
               child: filtered.isEmpty
                   ? const Center(child: Text('Sin resultados.'))
@@ -168,6 +172,18 @@ class _MarcarTabState extends ConsumerState<_MarcarTab> {
     }
     return const [];
   }
+
+  Widget _gridLabel(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 12, 4),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.outline,
+          ),
+        ),
+      );
 
   Widget _topChip(String? value, String label) => Padding(
         padding: const EdgeInsets.only(right: 8),
