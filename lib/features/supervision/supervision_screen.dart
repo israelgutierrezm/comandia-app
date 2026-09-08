@@ -105,8 +105,13 @@ class _SessionCard extends StatelessWidget {
                 const Text('No tienes permiso para ver el corte (precorte ciego).')
               else if (data.cut.isEmpty)
                 const Text('Sin corte que mostrar todavía.')
-              else
+              else ...[
+                if (data.summary != null) ...[
+                  _ResumenTurno(summary: data.summary!),
+                  const Divider(height: 24),
+                ],
                 _CutTable(rows: data.cut),
+              ],
             ],
           ],
         ),
@@ -149,6 +154,49 @@ class _CutTable extends StatelessWidget {
               ),
             ]),
           ),
+      ],
+    );
+  }
+}
+
+/// El resumen del turno: ventas, cómo se pagó por método, gastos, retiros y el
+/// efectivo teórico (resaltado). Espeja lo que muestra la caja del admin web.
+class _ResumenTurno extends StatelessWidget {
+  const _ResumenTurno({required this.summary});
+  final CutSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    String money(String? v) => v == null ? '—' : '\$$v';
+    final outline = Theme.of(context).colorScheme.outline;
+
+    Widget row(String label, String value, {bool strong = false}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: TextStyle(color: outline)),
+              Text(
+                value,
+                style: TextStyle(
+                  fontWeight: strong ? FontWeight.w700 : FontWeight.w600,
+                  color: strong ? Theme.of(context).colorScheme.primary : null,
+                ),
+              ),
+            ],
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Resumen del turno', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        row('Ventas del turno', money(summary.salesTotal)),
+        for (final p in summary.paymentsByMethod) row(p.method, money(p.amount)),
+        row('Gastos', money(summary.expensesTotal)),
+        row('Retiros', money(summary.withdrawalsTotal)),
+        row('Efectivo teórico', money(summary.expectedCash), strong: true),
       ],
     );
   }

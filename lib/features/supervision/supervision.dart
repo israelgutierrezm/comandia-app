@@ -83,12 +83,54 @@ class CutMethod {
       );
 }
 
+/// Un pago cobrado por método, para el resumen del turno («cómo me pagaron»).
+class CutPayment {
+  CutPayment({required this.method, required this.amount});
+
+  final String method;
+  final String amount;
+
+  factory CutPayment.fromJson(Map<String, dynamic> d) => CutPayment(
+        method: (d['method'] ?? '—') as String,
+        amount: (d['amount'] ?? '0.00') as String,
+      );
+}
+
+/// El resumen del turno: lo vendido, cómo se pagó, lo que salió y el efectivo teórico.
+/// Todo lo calcula el servidor a partir del diario financiero; aquí sólo se muestra.
+class CutSummary {
+  CutSummary({
+    this.expectedCash,
+    this.salesTotal,
+    this.expensesTotal,
+    this.withdrawalsTotal,
+    this.paymentsByMethod = const [],
+  });
+
+  final String? expectedCash;
+  final String? salesTotal;
+  final String? expensesTotal;
+  final String? withdrawalsTotal;
+  final List<CutPayment> paymentsByMethod;
+
+  factory CutSummary.fromJson(Map<String, dynamic> d) => CutSummary(
+        expectedCash: d['expected_cash'] as String?,
+        salesTotal: d['sales_total'] as String?,
+        expensesTotal: d['expenses_total'] as String?,
+        withdrawalsTotal: d['withdrawals_total'] as String?,
+        paymentsByMethod: ((d['payments_by_method'] as List?) ?? const [])
+            .map((m) => CutPayment.fromJson(Map<String, dynamic>.from(m as Map)))
+            .toList(),
+      );
+}
+
 class SupervisionData {
-  SupervisionData({required this.context, this.session, this.cut = const [], this.cutForbidden = false});
+  SupervisionData({required this.context, this.session, this.cut = const [], this.summary, this.cutForbidden = false});
 
   final AppContext context;
   final OpenSession? session;
   final List<CutMethod> cut;
+  final CutSummary? summary;
   final bool cutForbidden;
 }
 
@@ -128,6 +170,7 @@ class SupervisionRepository {
 
     // 3) El corte del turno, si esta persona puede verlo (el precorte ciego, D289: un 403 no es un error).
     var cut = <CutMethod>[];
+    CutSummary? summary;
     var cutForbidden = false;
     if (session != null) {
       final cutRes = await _api.dio.get<dynamic>('/pos-sessions/${session.ulid}/cut');
@@ -136,12 +179,13 @@ class SupervisionRepository {
         cut = ((d['by_method'] as List?) ?? const [])
             .map((m) => CutMethod.fromJson(Map<String, dynamic>.from(m as Map)))
             .toList();
+        summary = CutSummary.fromJson(d);
       } else if (cutRes.statusCode == 403) {
         cutForbidden = true;
       }
     }
 
-    return SupervisionData(context: context, session: session, cut: cut, cutForbidden: cutForbidden);
+    return SupervisionData(context: context, session: session, cut: cut, summary: summary, cutForbidden: cutForbidden);
   }
 }
 
