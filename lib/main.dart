@@ -20,7 +20,10 @@ class ComandiaApp extends ConsumerWidget {
     return MaterialApp.router(
       title: 'Comandia',
       debugShowCheckedModeBanner: false,
+      // Oscuro dominante: se fuerza el tema oscuro de marca sin importar el ajuste del sistema.
       theme: comandiaTheme,
+      darkTheme: comandiaTheme,
+      themeMode: ThemeMode.dark,
       routerConfig: ref.watch(routerProvider),
     );
   }
