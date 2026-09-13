@@ -6,6 +6,7 @@ import '../pos/accounts_tab.dart';
 import '../printing/printing_screen.dart';
 import '../reports/reports_tab.dart';
 import '../sessions/sessions_tab.dart';
+import '../shared_terminal/shared_terminal.dart';
 import '../supervision/supervision_screen.dart';
 
 /// El hogar de la app: las funciones por pestañas. La sesión (cerrar) vive en la
@@ -25,14 +26,20 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // En modo kiosco (ADR-014) «Salir» BLOQUEA: olvida al operador y vuelve al PIN, sin cerrar el
+    // emparejamiento del dispositivo. En modo usuario cierra la sesión de usuario.
+    final kioskOperating = ref.watch(kioskControllerProvider) == KioskStatus.operating;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_index]),
         actions: [
           IconButton(
-            tooltip: 'Salir',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(authControllerProvider.notifier).logout(),
+            tooltip: kioskOperating ? 'Bloquear' : 'Salir',
+            icon: Icon(kioskOperating ? Icons.lock_outline : Icons.logout),
+            onPressed: () => kioskOperating
+                ? ref.read(kioskControllerProvider.notifier).lock()
+                : ref.read(authControllerProvider.notifier).logout(),
           ),
         ],
       ),

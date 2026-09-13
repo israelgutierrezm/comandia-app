@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'auth.dart';
 
@@ -121,6 +122,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   child: _loading
                       ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
                       : const Text('Entrar'),
+                ),
+                const SizedBox(height: 6),
+                // Alta de este aparato como terminal compartida (ADR-014): se pega el secreto de enrolamiento.
+                TextButton.icon(
+                  onPressed: _loading ? null : () => context.go('/kiosk'),
+                  icon: const Icon(Icons.point_of_sale_outlined, size: 18),
+                  label: const Text('Configurar como terminal compartida'),
                 ),
               ],
             ),
