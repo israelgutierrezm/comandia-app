@@ -324,5 +324,45 @@ void main() {
       expect(sent, isFalse);
       expect(failedPosts, 1);
     });
+
+    test('una apertura de cajón manda SÓLO el pulso: ni texto ni corte de papel', () async {
+      // Antes se trataba como un ticket: salía una tira casi en blanco y el cajón seguía cerrado.
+      final cajon = {
+        'ulid': 'J3',
+        'kind': 'drawer_open',
+        'kind_label': 'Apertura de cajón',
+        'printer': {'name': 'Caja', 'connection': 'network', 'target': '10.0.0.5', 'paper_width': 80},
+        'payload': {'version': 1, 'kind': 'drawer_open', 'reason': 'Dar cambio', 'actor_membership_ulid': 'M1'},
+      };
+      final dio = _dioReturning((o) {
+        if (o.path.endsWith('/jobs/next')) return _json({'data': [cajon]}, 200);
+        return _json({'ok': true}, 200);
+      });
+      List<int>? bytes;
+      final pump = PrintPump(dio: dio, store: _FakeStore(), sender: (_, _, b) async => bytes = b);
+
+      final events = await pump.cycle();
+
+      expect(events.single.ok, isTrue);
+      expect(events.single.detail, 'Cajón abierto');
+      expect(bytes, renderDrawerPulse());
+      // El pulso ESC p está; el corte GS V no.
+      expect(_contiene(bytes!, [0x1B, 0x70, 0x00]), isTrue);
+      expect(_contiene(bytes!, [0x1D, 0x56]), isFalse);
+    });
   });
+}
+
+bool _contiene(List<int> bytes, List<int> secuencia) {
+  for (var i = 0; i + secuencia.length <= bytes.length; i++) {
+    var igual = true;
+    for (var j = 0; j < secuencia.length; j++) {
+      if (bytes[i + j] != secuencia[j]) {
+        igual = false;
+        break;
+      }
+    }
+    if (igual) return true;
+  }
+  return false;
 }

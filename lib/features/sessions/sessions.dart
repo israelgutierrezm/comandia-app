@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_client.dart';
 import '../../core/providers.dart';
-import '../../core/token_storage.dart';
 import '../supervision/supervision.dart' show CutMethod;
 
 /// Un turno de caja en el listado.
@@ -60,10 +59,9 @@ class CajaError implements Exception {
 }
 
 class SessionsRepository {
-  SessionsRepository(this._api, this._storage);
+  SessionsRepository(this._api);
 
   final ApiClient _api;
-  final TokenStorage _storage;
 
   Future<List<SessionSummary>> list({required String status}) async {
     final res = await _api.dio.get<dynamic>('/pos-sessions', queryParameters: {
@@ -92,14 +90,11 @@ class SessionsRepository {
         .toList();
   }
 
-  /// Las terminales activas de la sucursal activa. Necesita `organization.terminals.view` (gerente/propietario).
+  /// Las terminales activas de la sucursal activa, entre las que se elige al abrir turno. Se piden a la lectura del POS
+  /// (`/pos/terminals`, permiso de abrir turno) y no al catálogo de administración (`/terminals`), que exige un permiso
+  /// que el cajero no tiene; la sucursal la toma el servidor del contexto (cabecera `X-Branch`), no un filtro.
   Future<List<Terminal>> terminals() async {
-    final branch = await _storage.readBranch();
-    final res = await _api.dio.get<dynamic>('/terminals', queryParameters: {
-      'status': 'active',
-      'per_page': 50,
-      'branch': ?branch,
-    });
+    final res = await _api.dio.get<dynamic>('/pos/terminals');
     if (res.statusCode != 200) throw CajaError('No se pudieron cargar las terminales (${res.statusCode}).');
     final list = (res.data is Map ? res.data['data'] : res.data) as List? ?? const [];
     return list.map((e) => Terminal.fromJson(Map<String, dynamic>.from(e as Map))).toList();
@@ -130,7 +125,7 @@ class CutForbidden implements Exception {
 }
 
 final sessionsRepositoryProvider = Provider<SessionsRepository>(
-  (ref) => SessionsRepository(ref.watch(apiClientProvider), ref.watch(tokenStorageProvider)),
+  (ref) => SessionsRepository(ref.watch(apiClientProvider)),
 );
 
 final terminalsProvider = FutureProvider.autoDispose<List<Terminal>>(

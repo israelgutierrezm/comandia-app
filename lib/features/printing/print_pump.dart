@@ -37,10 +37,19 @@ class PrintJob {
     required this.paperWidth,
     required this.payload,
     this.printerName,
+    this.kind = '',
   });
 
   final String ulid;
   final String kindLabel;
+
+  /// El tipo del trabajo (`command`, `final_receipt`, `drawer_open`…). Decide QUÉ bytes se mandan: una apertura de
+  /// cajón no es un papel.
+  final String kind;
+
+  /// Abrir el cajón: se manda sólo el pulso, sin imprimir nada. Antes se trataba como un ticket y salía una tira casi en
+  /// blanco mientras el cajón seguía cerrado.
+  bool get isDrawerOpen => kind == 'drawer_open' || payload['kind'] == 'drawer_open';
 
   /// `network` | `usb` | `windows_share`. La app solo puede con `network` (TCP a la LAN).
   final String connection;
@@ -59,6 +68,7 @@ class PrintJob {
       paperWidth: (printer?['paper_width'] as num?)?.toInt(),
       payload: (j['payload'] as Map?)?.cast<String, dynamic>() ?? const {},
       printerName: printer?['name'] as String?,
+      kind: (j['kind'] ?? '').toString(),
     );
   }
 
@@ -137,12 +147,14 @@ class PrintPump {
       final host = parts.first;
       final port = parts.length > 1 ? (int.tryParse(parts[1]) ?? 9100) : 9100;
 
-      final bytes = renderTicket(job.payload, paperWidth: job.paperWidth, charset: charset);
+      final bytes = job.isDrawerOpen
+          ? renderDrawerPulse(charset: charset)
+          : renderTicket(job.payload, paperWidth: job.paperWidth, charset: charset);
       await sender(host, port, bytes);
-      // Se marca ANTES de avisar: si el aviso falla, la marca ya evita la reimpresión.
+      // Se marca ANTES de avisar: si el aviso falla, la marca ya evita la reimpresión (o volver a abrir el cajón).
       await store.markPrinted(job.ulid);
       await _report(job.ulid, ok: true);
-      return PumpEvent(job.title, true, 'Impreso');
+      return PumpEvent(job.title, true, job.isDrawerOpen ? 'Cajón abierto' : 'Impreso');
     } on SocketException catch (e) {
       await _report(job.ulid, ok: false, error: 'No se pudo conectar a ${job.target} (${e.osError?.message ?? 'sin ruta'}).');
       return PumpEvent(job.title, false, 'No se pudo conectar');

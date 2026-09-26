@@ -62,10 +62,10 @@ void main() {
       final storage = TokenStorage(const FlutterSecureStorage());
       final api = ApiClient(storage);
       api.dio.httpClientAdapter = adapter;
-      return SessionsRepository(api, storage);
+      return SessionsRepository(api);
     }
 
-    test('terminals pide activas y la sucursal activa', () async {
+    test('terminals pide la lectura del POS y la sucursal va en el contexto, no como filtro', () async {
       RequestOptions? got;
       final adapter = _FakeAdapter((o) {
         got = o;
@@ -79,8 +79,15 @@ void main() {
       final terminals = await buildRepo(adapter).terminals();
 
       expect(terminals.single.name, 'Caja 1');
-      expect(got!.queryParameters['status'], 'active');
-      expect(got!.queryParameters['branch'], 'BR1');
+      expect(got!.path, '/pos/terminals');
+      // El listado de administración rechaza filtros desconocidos (422); aquí no se manda ninguno.
+      expect(got!.queryParameters, isEmpty);
+      expect(got!.headers['X-Branch'], 'BR1');
+    });
+
+    test('un 403 al pedir terminales se traduce a CajaError', () async {
+      final adapter = _FakeAdapter((o) => _json({'message': 'Sin permiso.'}, 403));
+      await expectLater(buildRepo(adapter).terminals(), throwsA(isA<CajaError>()));
     });
 
     test('openSession postea terminal y fondo', () async {

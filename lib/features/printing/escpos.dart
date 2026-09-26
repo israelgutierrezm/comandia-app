@@ -141,6 +141,14 @@ String _row(String left, String right, int cols) {
   return left + ' ' * gap + right;
 }
 
+/// Sólo el pulso al cajón de dinero: inicializa la impresora y abre el cajón, sin avanzar ni cortar papel. Es lo que
+/// pide un trabajo `drawer_open` (el servidor lo encola con PIN de un superior).
+List<int> renderDrawerPulse({Charset charset = Charset.cp850}) {
+  final p = EscPos(charset: charset);
+  p.drawer();
+  return p.bytes();
+}
+
 /// Renderiza el payload estructurado del ticket (contrato v1) a bytes ESC/POS.
 ///
 /// Sirve para comanda (sin dinero) y ticket final (con totales y pagos): la presencia de `totals` distingue uno de otro.

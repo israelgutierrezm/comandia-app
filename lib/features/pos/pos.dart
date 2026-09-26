@@ -305,14 +305,27 @@ class PosRepository {
     return AccountSummary.fromJson(_map(res.data));
   }
 
+  /// Todo el catálogo vendible en el POS. El servidor pagina a lo más 100 por página, así que se recorren las páginas
+  /// (`meta.last_page`) en vez de pedir una sola más grande: con 101 artículos el 101 no aparecía en la terminal. El
+  /// tope de páginas es un seguro contra un servidor que nunca dijera cuál es la última.
   Future<List<CatalogArticle>> catalog() async {
-    final res = await _api.dio.get<dynamic>('/articles', queryParameters: {
-      'available_in_pos': 1,
-      'status': 'active',
-      'per_page': 200,
-    });
-    _ok(res.statusCode, 'el catálogo');
-    return _list(res.data).map((e) => CatalogArticle.fromJson(e)).toList();
+    const maxPages = 50;
+    final all = <CatalogArticle>[];
+    for (var page = 1; page <= maxPages; page++) {
+      final res = await _api.dio.get<dynamic>('/articles', queryParameters: {
+        'available_in_pos': 1,
+        'status': 'active',
+        'per_page': 100,
+        'page': page,
+      });
+      _ok(res.statusCode, 'el catálogo');
+      all.addAll(_list(res.data).map((e) => CatalogArticle.fromJson(e)));
+
+      final meta = res.data is Map ? (res.data as Map)['meta'] : null;
+      final lastPage = meta is Map ? (meta['last_page'] as num?)?.toInt() ?? 1 : 1;
+      if (page >= lastPage) break;
+    }
+    return all;
   }
 
   /// El árbol de categorías (nivel 1 con sus subcategorías nivel 2), para las pestañas y chips del POS.

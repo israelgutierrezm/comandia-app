@@ -106,4 +106,43 @@ void main() {
       expect(got!.data['table_ulid'], 'T4');
     });
   });
+
+  group('PosRepository catálogo', () {
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        (call) async => null,
+      );
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+        null,
+      );
+    });
+
+    test('catalog recorre todas las páginas: el servidor corta en 100 por página', () async {
+      final pages = <Object?>[];
+      final adapter = _FakeAdapter((o) {
+        final page = o.queryParameters['page'] as int;
+        pages.add(page);
+        expect(o.queryParameters['per_page'], 100);
+        return _json({
+          'data': [
+            {'ulid': 'A$page', 'name': 'Artículo $page'},
+          ],
+          'meta': {'current_page': page, 'last_page': 3},
+        }, 200);
+      });
+
+      final storage = TokenStorage(const FlutterSecureStorage());
+      final api = ApiClient(storage)..dio.httpClientAdapter = adapter;
+      final articles = await PosRepository(api, storage).catalog();
+
+      expect(pages, [1, 2, 3]);
+      expect(articles.map((a) => a.ulid), ['A1', 'A2', 'A3']);
+    });
+  });
 }
