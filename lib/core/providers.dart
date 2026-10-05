@@ -32,12 +32,14 @@ final kioskUnauthorizedTickProvider = StateProvider<int>((ref) => 0);
 /// núcleo por la misma razón que la del kiosco.
 final userUnauthorizedTickProvider = StateProvider<int>((ref) => 0);
 
-/// Época de la sesión de usuario: cambia cada vez que la sesión empieza o termina (se restaura, se entra, se sale o el
-/// servidor la revoca). Todo lo que se deriva de quién opera —los repositorios y lo que se cargó con ellos, permisos,
-/// contexto con rol y sucursal, carritos sin mandar, filtros— la vigila con `ref.watch`, así que se descarta en UN solo
-/// punto: quien entre después en este aparato nunca ve lo del anterior. La mueve el controlador de sesión; vive en el
-/// núcleo, como las señales de 401, para que las features no dependan de él. Lo del DISPOSITIVO (emparejamiento del
-/// kiosco, puente de impresión) no la vigila: debe sobrevivir al cierre de sesión.
+/// Época de quien opera: cambia cada vez que cambia la persona detrás de la app. La mueven el controlador de sesión
+/// (la sesión de usuario empieza o termina: se restaura, se entra, se sale o el servidor la revoca) y el del kiosco
+/// (se identifica alguien distinto de quien dejó trabajo sin mandar; si vuelve la misma persona, no se mueve). Todo lo
+/// que se deriva de quién opera —los repositorios y lo que se cargó con ellos, permisos, contexto con rol y sucursal,
+/// carritos sin mandar, filtros— la vigila con `ref.watch`, así que se descarta en UN solo punto: quien entre después
+/// en este aparato nunca ve lo del anterior. Vive en el núcleo, como las señales de 401, para que las features no
+/// dependan de esos controladores. Lo del DISPOSITIVO (emparejamiento del kiosco, puente de impresión) no la vigila:
+/// debe sobrevivir a cualquier cambio de persona.
 final sessionEpochProvider = StateProvider<int>((ref) => 0);
 
 final apiClientProvider = Provider<ApiClient>(

@@ -74,6 +74,20 @@ class SharedTerminalRepository {
     throw IdentifyError(_title(res.data) ?? 'Código de empleado o PIN incorrectos.');
   }
 
+  /// Quién quedó identificado, según el SERVIDOR (no el código tecleado): `/context` responde por el operador en turno
+  /// del kiosco. Devuelve el ULID de su membresía, o `null` si no se pudo saber (sin red, respuesta inesperada).
+  Future<String?> currentOperatorUlid() async {
+    try {
+      final res = await _api.dio.get<dynamic>('/context');
+      final body = res.data;
+      final data = body is Map && body['data'] is Map ? body['data'] : body;
+      final membership = data is Map ? data['membership'] : null;
+      return res.statusCode == 200 && membership is Map ? membership['ulid'] as String? : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Salir: olvida al operador en el servidor. Mejor esfuerzo — un fallo de red no debe atorar el bloqueo.
   Future<void> release() async {
     try {
@@ -117,6 +131,12 @@ enum KioskStatus { unknown, unpaired, locked, operating }
 /// Gobierna el modo kiosco. Al arrancar restaura desde el token del dispositivo; el router escucha este
 /// estado (junto al de sesión) para mandar al emparejamiento, al bloqueo o al POS.
 class KioskController extends Notifier<KioskStatus> {
+  /// La membresía (ULID) dueña de lo que quedó sin mandar en este aparato: carritos y filtros. Bloquear o caducar por
+  /// inactividad no la olvida: al identificarse alguien se compara, y si vuelve la MISMA persona lo suyo sigue ahí; si
+  /// es otra (o no se sabe quién), se descarta antes de que vea nada. Es por atribución: una línea debe mandarla quien
+  /// la capturó, nunca otra persona con su nombre.
+  String? _owner;
+
   @override
   KioskStatus build() {
     // Si una petición del kiosco vino 401 mientras se operaba, el operador caducó: de vuelta al bloqueo.
@@ -143,7 +163,15 @@ class KioskController extends Notifier<KioskStatus> {
 
   /// Identifica al operador por PIN → a operar. Lanza [IdentifyError].
   Future<void> identify({required String employeeCode, required String pin}) async {
-    await ref.read(sharedTerminalRepositoryProvider).identify(employeeCode: employeeCode, pin: pin);
+    final repo = ref.read(sharedTerminalRepositoryProvider);
+    await repo.identify(employeeCode: employeeCode, pin: pin);
+
+    // Si no es quien dejó trabajo sin mandar, se descarta (v. [_owner]) ANTES de pasar a operar. Si el servidor no
+    // confirma quién es, se trata como otra persona: perder un carrito es preferible a heredarlo.
+    final operator = await repo.currentOperatorUlid();
+    if (operator == null || operator != _owner) ref.read(sessionEpochProvider.notifier).state++;
+    _owner = operator;
+
     state = KioskStatus.operating;
   }
 
