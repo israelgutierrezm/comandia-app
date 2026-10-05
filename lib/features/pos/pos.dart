@@ -459,9 +459,12 @@ class StaleAccount implements Exception {
   const StaleAccount();
 }
 
-final posRepositoryProvider = Provider<PosRepository>(
-  (ref) => PosRepository(ref.watch(apiClientProvider), ref.watch(tokenStorageProvider)),
-);
+/// Un repositorio por sesión (v. [sessionEpochProvider]): al cambiar la sesión se recrea, y todo lo que se cargó con él
+/// —cuentas, mesas, catálogo, métodos de pago— se descarta y se vuelve a pedir con la credencial de quien opere.
+final posRepositoryProvider = Provider<PosRepository>((ref) {
+  ref.watch(sessionEpochProvider);
+  return PosRepository(ref.watch(apiClientProvider), ref.watch(tokenStorageProvider));
+});
 
 final openAccountsProvider = FutureProvider.autoDispose<List<AccountSummary>>(
   (ref) => ref.watch(posRepositoryProvider).openAccounts(),
@@ -489,7 +492,11 @@ final paymentMethodsProvider = FutureProvider.autoDispose<List<PaymentMethod>>(
 
 /// Los permisos del rol activo, leídos del contexto. Sirven para ocultar acciones que el servidor rechazaría de todos
 /// modos (p. ej. «Cobrar» a un mesero sin `pos.accounts.charge`). El servidor sigue siendo la autoridad.
-final permissionsProvider = FutureProvider<Set<String>>((ref) async {
+///
+/// Son de quien opera: se descartan al cambiar la sesión y, como el resto de lo cargado, cuando ya ninguna pantalla los
+/// usa (así el siguiente operador del kiosco tampoco hereda los del anterior).
+final permissionsProvider = FutureProvider.autoDispose<Set<String>>((ref) async {
+  ref.watch(sessionEpochProvider);
   final res = await ref.watch(apiClientProvider).dio.get<dynamic>('/context');
   final data = (res.data is Map && res.data['data'] is Map) ? res.data['data'] as Map : (res.data as Map);
   return ((data['permissions'] as List?) ?? const []).map((e) => '$e').toSet();
@@ -500,8 +507,12 @@ final permissionsProvider = FutureProvider<Set<String>>((ref) async {
 // ---------------------------------------------------------------------------
 
 class CaptureCart extends FamilyNotifier<List<CaptureLine>, String> {
+  // Lo capturado y aún sin mandar es de quien lo capturó: una sesión nueva empieza con todos los carritos vacíos.
   @override
-  List<CaptureLine> build(String arg) => const [];
+  List<CaptureLine> build(String arg) {
+    ref.watch(sessionEpochProvider);
+    return const [];
+  }
 
   void add(CatalogArticle article) {
     final existing = state.indexWhere((l) => l.articleUlid == article.ulid);

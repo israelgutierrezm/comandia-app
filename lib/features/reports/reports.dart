@@ -60,9 +60,12 @@ class ReportsRepository {
   }
 }
 
-final reportsRepositoryProvider = Provider<ReportsRepository>(
-  (ref) => ReportsRepository(ref.watch(apiClientProvider)),
-);
+/// Un repositorio por sesión (v. [sessionEpochProvider]): al cambiar la sesión se recrea, y los reportes que se
+/// cargaron con él (los que el rol de quien operaba podía ver) se descartan.
+final reportsRepositoryProvider = Provider<ReportsRepository>((ref) {
+  ref.watch(sessionEpochProvider);
+  return ReportsRepository(ref.watch(apiClientProvider));
+});
 
 final reportsListProvider = FutureProvider.autoDispose<List<ReportSummary>>(
   (ref) => ref.watch(reportsRepositoryProvider).list(),

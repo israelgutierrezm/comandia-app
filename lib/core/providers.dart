@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'api_client.dart';
+import 'device_name.dart';
 import 'shared_terminal_storage.dart';
 import 'token_storage.dart';
 
@@ -26,10 +27,28 @@ final sharedTerminalStorageProvider = Provider<SharedTerminalStorage>(
 /// el cliente HTTP no conoce la feature; la feature escucha esta señal.
 final kioskUnauthorizedTickProvider = StateProvider<int>((ref) => 0);
 
+/// Señal de «una petición con el token del USUARIO vino 401»: el servidor ya no reconoce la sesión. La emite
+/// [ApiClient] (una vez por token) y la escucha el controlador de sesión para cerrarla también aquí. Vive en el
+/// núcleo por la misma razón que la del kiosco.
+final userUnauthorizedTickProvider = StateProvider<int>((ref) => 0);
+
+/// Época de la sesión de usuario: cambia cada vez que la sesión empieza o termina (se restaura, se entra, se sale o el
+/// servidor la revoca). Todo lo que se deriva de quién opera —los repositorios y lo que se cargó con ellos, permisos,
+/// contexto con rol y sucursal, carritos sin mandar, filtros— la vigila con `ref.watch`, así que se descarta en UN solo
+/// punto: quien entre después en este aparato nunca ve lo del anterior. La mueve el controlador de sesión; vive en el
+/// núcleo, como las señales de 401, para que las features no dependan de él. Lo del DISPOSITIVO (emparejamiento del
+/// kiosco, puente de impresión) no la vigila: debe sobrevivir al cierre de sesión.
+final sessionEpochProvider = StateProvider<int>((ref) => 0);
+
 final apiClientProvider = Provider<ApiClient>(
   (ref) => ApiClient(
     ref.watch(tokenStorageProvider),
     ref.watch(sharedTerminalStorageProvider),
     () => ref.read(kioskUnauthorizedTickProvider.notifier).state++,
+    () => ref.read(userUnauthorizedTickProvider.notifier).state++,
   ),
 );
+
+/// Nombre legible de ESTE aparato («Motorola moto g32 · Android 14») con el que se da de alta la sesión: es lo que
+/// se ve en «Mis dispositivos». Se lee una sola vez: el aparato no cambia mientras la app corre.
+final deviceNameProvider = FutureProvider<String>((ref) => readDeviceName());

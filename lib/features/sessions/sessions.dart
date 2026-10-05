@@ -124,16 +124,22 @@ class CutForbidden implements Exception {
   const CutForbidden();
 }
 
-final sessionsRepositoryProvider = Provider<SessionsRepository>(
-  (ref) => SessionsRepository(ref.watch(apiClientProvider)),
-);
+/// Un repositorio por sesión (v. [sessionEpochProvider]): al cambiar la sesión se recrea, y los turnos, cortes y
+/// terminales que se cargaron con él se descartan.
+final sessionsRepositoryProvider = Provider<SessionsRepository>((ref) {
+  ref.watch(sessionEpochProvider);
+  return SessionsRepository(ref.watch(apiClientProvider));
+});
 
 final terminalsProvider = FutureProvider.autoDispose<List<Terminal>>(
   (ref) => ref.watch(sessionsRepositoryProvider).terminals(),
 );
 
-/// El estado seleccionado en la pestaña de turnos.
-final sessionsFilterProvider = StateProvider<String>((ref) => 'open');
+/// El estado seleccionado en la pestaña de turnos. Cada sesión empieza en «abiertos».
+final sessionsFilterProvider = StateProvider<String>((ref) {
+  ref.watch(sessionEpochProvider);
+  return 'open';
+});
 
 final sessionsListProvider =
     FutureProvider.autoDispose.family<List<SessionSummary>, String>((ref, status) {

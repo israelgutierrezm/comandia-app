@@ -189,13 +189,18 @@ class SupervisionRepository {
   }
 }
 
-final supervisionRepositoryProvider = Provider<SupervisionRepository>(
-  (ref) => SupervisionRepository(ref.watch(apiClientProvider), ref.watch(tokenStorageProvider)),
-);
+/// Un repositorio por sesión (v. [sessionEpochProvider]): al cambiar la sesión se recrea, y el resumen que se cargó con
+/// él (negocio, rol y sucursal, caja y corte) se descarta y se vuelve a pedir con la credencial de quien opere.
+final supervisionRepositoryProvider = Provider<SupervisionRepository>((ref) {
+  ref.watch(sessionEpochProvider);
+  return SupervisionRepository(ref.watch(apiClientProvider), ref.watch(tokenStorageProvider));
+});
 
-class SupervisionController extends AsyncNotifier<SupervisionData> {
+/// El resumen de quien opera. Además de descartarse al cambiar la sesión (vigila el repositorio), muere cuando ya
+/// ninguna pantalla lo muestra, como el resto de lo cargado: el siguiente operador del kiosco no hereda el anterior.
+class SupervisionController extends AutoDisposeAsyncNotifier<SupervisionData> {
   @override
-  Future<SupervisionData> build() => ref.read(supervisionRepositoryProvider).load();
+  Future<SupervisionData> build() => ref.watch(supervisionRepositoryProvider).load();
 
   Future<void> refresh() async {
     state = const AsyncLoading();
@@ -204,4 +209,4 @@ class SupervisionController extends AsyncNotifier<SupervisionData> {
 }
 
 final supervisionControllerProvider =
-    AsyncNotifierProvider<SupervisionController, SupervisionData>(SupervisionController.new);
+    AsyncNotifierProvider.autoDispose<SupervisionController, SupervisionData>(SupervisionController.new);

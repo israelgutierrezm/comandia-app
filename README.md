@@ -19,6 +19,7 @@ Los tres roles de la Iteración 9 están completos:
 - **Estado:** Riverpod (`Notifier` / `AsyncNotifier`, sin generación de código).
 - **HTTP:** `dio`, con un interceptor que añade `Authorization: Bearer` y `X-Role`/`X-Branch`.
 - **Token:** `flutter_secure_storage` (Keychain / Keystore).
+- **Sesión:** el login da de alta el aparato con un nombre legible (`device_info_plus`: «Motorola moto g32 · Android 14»), que es lo que se ve en «Mis dispositivos». «Salir» revoca el token en el servidor (`DELETE auth/token`, mejor esfuerzo) y siempre cierra la sesión local. Un 401 con el token del usuario (sesión revocada desde la web, por un administrador, por cambio de contraseña o por desuso) cierra la sesión y regresa al acceso, una sola vez.
 - **Navegación:** `go_router`, con redirección según haya sesión.
 - **Por feature:** `lib/features/{auth,supervision,sessions,reports,pos,printing}`; infraestructura en `lib/core`.
 

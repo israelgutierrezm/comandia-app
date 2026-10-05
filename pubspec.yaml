@@ -38,6 +38,7 @@ dependencies:
   # Servicio en primer plano para la estación de impresión desatendida (Android): mantiene el sondeo vivo con la
   # pantalla apagada o la app en segundo plano, con notificación persistente.
   flutter_foreground_task: ^9.1.0
+  device_info_plus: ^13.2.0
 
 dev_dependencies:
   flutter_test:

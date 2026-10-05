@@ -24,9 +24,12 @@ class NeedTenantSelection implements Exception {
 }
 
 class AuthRepository {
-  AuthRepository(this._api);
+  AuthRepository(this._api, {this.logoutTimeout = const Duration(seconds: 5)});
 
   final ApiClient _api;
+
+  /// Cuánto se espera al servidor al cerrar sesión antes de desistir: sin red, «Salir» no debe quedar atorado.
+  final Duration logoutTimeout;
 
   /// Devuelve el token en claro. Lanza [AuthException] o [NeedTenantSelection].
   Future<String> login({
@@ -35,7 +38,7 @@ class AuthRepository {
     required String deviceName,
     String? tenantUlid,
   }) async {
-    final res = await _api.dio.post<dynamic>('/auth/token', data: {
+    final res = await _api.dio.post<dynamic>(ApiClient.authTokenPath, data: {
       'email': email,
       'password': password,
       'device_name': deviceName,
@@ -57,6 +60,18 @@ class AuthRepository {
     }
 
     throw AuthException(_firstError(data) ?? 'No se pudo iniciar sesión.');
+  }
+
+  /// Cierra la sesión EN EL SERVIDOR: `DELETE auth/token` revoca exactamente el token con el que viaja la petición
+  /// (el de este aparato), para que deje de valer también allá. Mejor esfuerzo y nunca lanza: un 401 significa que ya
+  /// estaba revocado o caducado —lo mismo que se buscaba—, y sin red o con el servidor lento se desiste a los
+  /// [logoutTimeout]. Quien llama cierra la sesión local de todos modos.
+  Future<void> logout() async {
+    try {
+      await _api.dio.delete<dynamic>(ApiClient.authTokenPath).timeout(logoutTimeout);
+    } catch (_) {
+      // El token sigue vivo en el servidor hasta que se revoque desde «Mis dispositivos» o caduque por desuso.
+    }
   }
 
   String? _firstError(dynamic data) {
@@ -81,6 +96,19 @@ enum AuthStatus { unknown, authenticated, unauthenticated }
 class AuthController extends Notifier<AuthStatus> {
   @override
   AuthStatus build() {
+    // Si una petición con el token del usuario vino 401, el servidor ya no reconoce la sesión (revocada desde «Mis
+    // dispositivos», por un administrador, por cambio de contraseña o por desuso): se cierra también aquí.
+    ref.listen(userUnauthorizedTickProvider, (_, _) => _endLocalSession());
+
+    // Cada cambio de sesión (restaurar, entrar, salir o sesión revocada) abre una época nueva: lo que depende de quién
+    // opera se descarta (v. [sessionEpochProvider]). No cuentan:
+    //  - la primera llamada, al terminar este build (`previous` nulo): no hay sesión anterior y, como este controlador se
+    //    crea mientras se construye la UI (lo lee el router), Riverpod no deja tocar otro provider en ese momento;
+    //  - reasignar el mismo estado (salir estando ya fuera): `listenSelf` también avisa entonces.
+    listenSelf((previous, next) {
+      if (previous != null && previous != next) ref.read(sessionEpochProvider.notifier).state++;
+    });
+
     _restore();
     return AuthStatus.unknown;
   }
@@ -98,7 +126,7 @@ class AuthController extends Notifier<AuthStatus> {
     final token = await ref.read(authRepositoryProvider).login(
           email: email,
           password: password,
-          deviceName: 'App Comandia',
+          deviceName: await ref.read(deviceNameProvider.future),
           tenantUlid: tenantUlid,
         );
 
@@ -106,9 +134,25 @@ class AuthController extends Notifier<AuthStatus> {
     state = AuthStatus.authenticated;
   }
 
+  /// Salir: revoca el token en el servidor (mejor esfuerzo) y cierra la sesión local pase lo que pase.
   Future<void> logout() async {
-    await ref.read(tokenStorageProvider).clear();
-    state = AuthStatus.unauthenticated;
+    // Primero el servidor: el cliente HTTP manda el token mientras siga guardado.
+    try {
+      await ref.read(authRepositoryProvider).logout();
+    } catch (_) {
+      // El repositorio no debería lanzar; si lo hace, tampoco detiene la salida.
+    }
+    await _endLocalSession();
+  }
+
+  /// Cierra la sesión EN ESTE APARATO: borra el token, el rol y la sucursal y manda al acceso (el router escucha
+  /// este estado). Aunque falle el almacenamiento, el estado queda sin sesión.
+  Future<void> _endLocalSession() async {
+    try {
+      await ref.read(tokenStorageProvider).clear();
+    } finally {
+      state = AuthStatus.unauthenticated;
+    }
   }
 }
 
